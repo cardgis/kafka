@@ -60,13 +60,6 @@ htmlcov/
 nosetests.xml
 coverage.xml
 
-# ==================== SPARK ====================
-# Spark logs
-derby.log
-metastore_db/
-spark-warehouse/
-.sparkStaging/
-
 # ==================== HDFS/DATA ====================
 # Données temporaires
 hdfs-data/
@@ -97,19 +90,20 @@ plots/
 reports/
 dashboard/
 
-# ==================== CONFIGURATION ====================
-# Fichiers de configuration sensibles
-*.secret
-*.key
-*.pem
-passwords.txt
-secrets.yaml
-.secrets/
+# ==================== DÉVELOPPEMENT ====================
+# Fichiers temporaires de développement
+*temp*
+*test*
+*draft*
+$null
+*.draft
+*.temp
 
-# Configuration locale
-config/local/
-config/*.local.*
-local.properties
+# Scripts de setup redondants
+*setup-remote*
+*prepare-*
+*indexation*
+*git-indexation*
 
 # ==================== IDE & EDITEURS ====================
 # VSCode
