@@ -1,384 +1,689 @@
 #!/usr/bin/env python3
 """
-Exercice 7: Consommateur Kafka vers HDFS
-==========================================
+🌊📁 Kafka Weather Analytics - Exercice 7: HDFS Consumer & Distributed Storage
+===============================================================================
 
-Consommateur qui lit les données météo depuis Kafka et les organise
-dans une structure HDFS hiérarchique par pays et ville.
-
-Structure HDFS: /hdfs-data/{country}/{city}/alerts.json
+Consumer Kafka avancé qui stocke les données météorologiques dans une structure
+HDFS (Hadoop Distributed File System) organisée géographiquement pour faciliter
+les analyses ultérieures et le traitement Big Data.
 
 Fonctionnalités:
-- Lecture des topics weather_transformed et geo_weather_stream
-- Organisation géographique des données
-- Sauvegarde JSON structurée
-- Gestion des partitions et du parallélisme
+- Consumer multi-topics avec auto-partitioning géographique
+- Stockage HDFS optimisé en format JSONL
+- Batch processing pour optimiser les performances I/O
+- Monitoring en temps réel avec métriques détaillées
+- Gestion d'erreurs robuste avec retry automatique
+- Support pour millions de messages par heure
 
-Author: Assistant
-Date: 2024
+Architecture:
+    hdfs-data/
+    ├── FR/Paris/alerts.json
+    ├── DE/Berlin/alerts.json  
+    ├── US/New-York/alerts.json
+    └── UNKNOWN/Unknown-City/alerts.json
+
+Usage:
+    python hdfs_consumer.py --hdfs-path "./hdfs-data" --topics geo_weather_stream
+    python hdfs_consumer.py --hdfs-path "./hdfs-data" --topics "weather_stream,geo_weather_stream" --monitoring
 """
 
 import json
 import os
-import argparse
-import signal
 import sys
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Dict, List, Optional, Set
 import time
-
-from kafka import KafkaConsumer
-from kafka.errors import KafkaError
+import argparse
 import logging
+import signal
+import threading
+from pathlib import Path
+from collections import defaultdict, Counter
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Set, Any
+import re
 
-# Configuration du logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# Kafka Client
+try:
+    from kafka import KafkaConsumer
+    from kafka.errors import KafkaError, KafkaTimeoutError
+except ImportError:
+    print("❌ kafka-python not installed. Run: pip install kafka-python")
+    sys.exit(1)
 
+# Data Processing
+try:
+    import pandas as pd
+except ImportError:
+    print("⚠️ pandas not installed. Some features may be limited. Run: pip install pandas")
+    pd = None
 
-class HDFSWeatherConsumer:
-    """Consommateur Kafka vers HDFS pour données météo géolocalisées"""
+# ==================================================================================
+# CONFIGURATION & CONSTANTS
+# ==================================================================================
+
+# Default Configuration
+DEFAULT_CONFIG = {
+    'kafka': {
+        'bootstrap_servers': ['localhost:9092'],
+        'group_id': 'hdfs_consumer_group',
+        'auto_offset_reset': 'earliest',
+        'enable_auto_commit': True,
+        'auto_commit_interval_ms': 1000,
+        'consumer_timeout_ms': 5000,
+        'max_poll_records': 500,
+        'value_deserializer': lambda x: json.loads(x.decode('utf-8')) if x else None
+    },
+    'hdfs': {
+        'base_path': './hdfs-data',
+        'batch_size': 100,
+        'flush_interval': 30,  # seconds
+        'max_file_size': 100 * 1024 * 1024,  # 100MB
+        'file_format': 'jsonl',
+        'create_directories': True
+    },
+    'monitoring': {
+        'enabled': False,
+        'stats_interval': 60,  # seconds
+        'log_level': 'INFO',
+        'performance_tracking': True
+    }
+}
+
+# Country Code Mapping
+COUNTRY_MAPPING = {
+    'france': 'FR', 'fr': 'FR', 'french': 'FR',
+    'germany': 'DE', 'de': 'DE', 'deutschland': 'DE', 'german': 'DE',
+    'united states': 'US', 'usa': 'US', 'us': 'US', 'america': 'US',
+    'united kingdom': 'GB', 'uk': 'GB', 'gb': 'GB', 'britain': 'GB',
+    'japan': 'JP', 'jp': 'JP', 'japanese': 'JP',
+    'spain': 'ES', 'es': 'ES', 'spanish': 'ES',
+    'italy': 'IT', 'it': 'IT', 'italian': 'IT',
+    'canada': 'CA', 'ca': 'CA', 'canadian': 'CA',
+    'australia': 'AU', 'au': 'AU', 'australian': 'AU'
+}
+
+# ==================================================================================
+# UTILITIES & HELPERS
+# ==================================================================================
+
+class PerformanceMonitor:
+    """Moniteur de performance pour tracking des métriques"""
     
-    def __init__(self, kafka_server: str = "localhost:9092", 
-                 hdfs_base_path: str = "./hdfs-data",
-                 topics: List[str] = None):
-        """
-        Initialise le consommateur HDFS
+    def __init__(self, stats_interval: int = 60):
+        self.stats_interval = stats_interval
+        self.reset_stats()
+        self.start_time = time.time()
+        self.last_stats_time = self.start_time
         
-        Args:
-            kafka_server: Serveur Kafka (host:port)
-            hdfs_base_path: Chemin de base pour la structure HDFS
-            topics: Liste des topics à consommer
-        """
-        self.kafka_server = kafka_server
-        self.hdfs_base_path = Path(hdfs_base_path)
-        self.topics = topics or ['weather_transformed', 'geo_weather_stream']
-        self.consumer = None
-        self.running = False
-        self.processed_count = 0
+    def reset_stats(self):
+        """Reset des statistiques"""
+        self.messages_processed = 0
+        self.batches_written = 0
+        self.total_bytes = 0
         self.error_count = 0
-        self.countries_seen: Set[str] = set()
-        self.cities_seen: Set[str] = set()
+        self.location_counter = Counter()
+        self.topic_counter = Counter()
         
-        # Créer la structure de base HDFS
-        self._ensure_hdfs_structure()
+    def record_message(self, topic: str, message_size: int, location: str):
+        """Enregistre une métrique de message"""
+        self.messages_processed += 1
+        self.total_bytes += message_size
+        self.location_counter[location] += 1
+        self.topic_counter[topic] += 1
         
-        print("🗄️  EXERCICE 7 - CONSOMMATEUR KAFKA VERS HDFS")
-        print("=" * 60)
+    def record_batch(self, batch_size: int):
+        """Enregistre une métrique de batch"""
+        self.batches_written += 1
         
-    def _ensure_hdfs_structure(self):
-        """Crée la structure de base HDFS si elle n'existe pas"""
+    def record_error(self):
+        """Enregistre une erreur"""
+        self.error_count += 1
+        
+    def get_current_stats(self) -> Dict[str, Any]:
+        """Retourne les statistiques actuelles"""
+        current_time = time.time()
+        elapsed_time = current_time - self.start_time
+        
+        stats = {
+            'runtime_seconds': elapsed_time,
+            'messages_processed': self.messages_processed,
+            'batches_written': self.batches_written,
+            'total_bytes': self.total_bytes,
+            'error_count': self.error_count,
+            'messages_per_second': self.messages_processed / elapsed_time if elapsed_time > 0 else 0,
+            'bytes_per_second': self.total_bytes / elapsed_time if elapsed_time > 0 else 0,
+            'avg_batch_size': self.messages_processed / self.batches_written if self.batches_written > 0 else 0,
+            'top_locations': dict(self.location_counter.most_common(10)),
+            'topics_distribution': dict(self.topic_counter)
+        }
+        
+        return stats
+    
+    def should_print_stats(self) -> bool:
+        """Vérifie si il faut imprimer les stats"""
+        current_time = time.time()
+        if current_time - self.last_stats_time >= self.stats_interval:
+            self.last_stats_time = current_time
+            return True
+        return False
+
+def normalize_country_name(country: str) -> str:
+    """Normalise le nom de pays vers un code ISO"""
+    if not country:
+        return 'UNKNOWN'
+        
+    country_clean = re.sub(r'[^a-zA-Z\s]', '', country.lower().strip())
+    
+    # Lookup direct
+    if country_clean in COUNTRY_MAPPING:
+        return COUNTRY_MAPPING[country_clean]
+    
+    # Lookup par mots-clés
+    for key, code in COUNTRY_MAPPING.items():
+        if key in country_clean or country_clean in key:
+            return code
+    
+    # Code ISO direct (2-3 lettres majuscules)
+    if len(country) <= 3 and country.isalpha():
+        return country.upper()
+    
+    return 'UNKNOWN'
+
+def normalize_city_name(city: str) -> str:
+    """Normalise le nom de ville pour le filesystem"""
+    if not city:
+        return 'Unknown-City'
+        
+    # Nettoyage et normalisation
+    city_clean = re.sub(r'[^\w\s-]', '', city.strip())
+    city_clean = re.sub(r'\s+', '-', city_clean)
+    city_clean = city_clean.title()
+    
+    return city_clean if city_clean else 'Unknown-City'
+
+def create_safe_path(base_path: str, *parts) -> Path:
+    """Crée un chemin filesystem sécurisé"""
+    path_parts = [base_path]
+    
+    for part in parts:
+        if part:
+            # Suppression des caractères dangereux
+            safe_part = re.sub(r'[<>:"|?*]', '', str(part))
+            safe_part = safe_part.replace('..', '')  # Prévention path traversal
+            path_parts.append(safe_part)
+    
+    return Path(*path_parts)
+
+# ==================================================================================
+# HDFS CONSUMER CORE
+# ==================================================================================
+
+class HDFSConsumer:
+    """Consumer Kafka avancé avec stockage HDFS géographique"""
+    
+    def __init__(self, config: Dict[str, Any]):
+        self.config = config
+        self.hdfs_path = Path(config['hdfs']['base_path'])
+        self.batch_size = config['hdfs']['batch_size']
+        self.flush_interval = config['hdfs']['flush_interval']
+        
+        # State management
+        self.running = False
+        self.consumer = None
+        self.batches = defaultdict(list)  # location -> messages
+        self.last_flush = time.time()
+        
+        # Monitoring
+        self.monitor = PerformanceMonitor(config['monitoring']['stats_interval'])
+        self.monitoring_enabled = config['monitoring']['enabled']
+        
+        # Setup logging
+        self.logger = self._setup_logging()
+        
+        # Ensure HDFS directory exists
+        self.hdfs_path.mkdir(parents=True, exist_ok=True)
+        
+        # Signal handlers for graceful shutdown
+        signal.signal(signal.SIGINT, self._signal_handler)
+        signal.signal(signal.SIGTERM, self._signal_handler)
+        
+    def _setup_logging(self) -> logging.Logger:
+        """Configuration du système de logging"""
+        logger = logging.getLogger(__name__)
+        logger.setLevel(getattr(logging, self.config['monitoring']['log_level']))
+        
+        # Console handler
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_formatter = logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )
+        console_handler.setFormatter(console_formatter)
+        logger.addHandler(console_handler)
+        
+        # File handler
+        log_file = self.hdfs_path / 'hdfs_consumer.log'
+        file_handler = logging.FileHandler(log_file)
+        file_formatter = logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s'
+        )
+        file_handler.setFormatter(file_formatter)
+        logger.addHandler(file_handler)
+        
+        return logger
+    
+    def _signal_handler(self, signum, frame):
+        """Handler pour arrêt gracieux"""
+        self.logger.info(f"🛑 Signal reçu ({signum}), arrêt en cours...")
+        self.stop()
+    
+    def connect_kafka(self, topics: List[str]) -> bool:
+        """Connexion au cluster Kafka"""
         try:
-            self.hdfs_base_path.mkdir(parents=True, exist_ok=True)
-            logger.info(f"📁 Structure HDFS créée: {self.hdfs_base_path}")
-            print(f"📁 Répertoire HDFS: {self.hdfs_base_path.absolute()}")
-        except Exception as e:
-            logger.error(f"❌ Erreur création structure HDFS: {e}")
-            raise
+            self.logger.info("🔌 Connexion à Kafka...")
             
-    def _setup_consumer(self):
-        """Configure et initialise le consommateur Kafka"""
-        try:
             self.consumer = KafkaConsumer(
-                *self.topics,
-                bootstrap_servers=self.kafka_server,
-                value_deserializer=lambda x: json.loads(x.decode('utf-8')),
-                key_deserializer=lambda x: x.decode('utf-8') if x else None,
-                group_id='hdfs-weather-consumer',
-                auto_offset_reset='earliest',
-                enable_auto_commit=True,
-                auto_commit_interval_ms=1000,
-                consumer_timeout_ms=1000,  # Timeout pour permettre les arrêts propres
+                *topics,
+                **self.config['kafka']
             )
             
-            print(f"✅ Consommateur HDFS créé:")
-            print(f"   📍 Serveur: {self.kafka_server}")
-            print(f"   📊 Topics: {', '.join(self.topics)}")
-            print(f"   👥 Groupe: hdfs-weather-consumer")
-            print(f"   🗄️  HDFS: {self.hdfs_base_path.absolute()}")
+            self.logger.info(f"✅ Connecté aux topics: {', '.join(topics)}")
             
-            logger.info(f"Consommateur créé pour topics: {self.topics}")
+            # Test de connexion
+            partitions = self.consumer.assignment()
+            self.logger.info(f"📊 Partitions assignées: {len(partitions)}")
             
-        except Exception as e:
-            logger.error(f"❌ Erreur configuration consommateur: {e}")
-            raise
-            
-    def _extract_location_info(self, message: Dict) -> tuple[str, str]:
-        """
-        Extrait les informations de localisation du message
-        
-        Args:
-            message: Message JSON Kafka
-            
-        Returns:
-            tuple: (country_code, city_name)
-        """
-        try:
-            # Tentative d'extraction depuis geo_weather_stream (format enrichi)
-            if 'location' in message:
-                location = message['location']
-                country_code = location.get('country_code', 'UNKNOWN')
-                city = location.get('city', 'UNKNOWN')
-                return country_code, city
-                
-            # Tentative d'extraction depuis weather_transformed (format alerte)
-            if 'location_data' in message:
-                location = message['location_data']
-                # Essayer de déduire le pays depuis latitude/longitude ou utiliser défaut
-                country_code = location.get('country_code', 'FR')  # Défaut France
-                city = location.get('city', f"LAT_{location.get('latitude', 0)}")
-                return country_code, city
-                
-            # Format basique avec latitude/longitude seulement
-            if 'latitude' in message and 'longitude' in message:
-                lat = message['latitude']
-                lon = message['longitude']
-                return 'UNKNOWN', f"LAT_{lat}_LON_{lon}"
-                
-            # Fallback par défaut
-            return 'UNKNOWN', 'UNKNOWN'
+            return True
             
         except Exception as e:
-            logger.warning(f"⚠️  Erreur extraction localisation: {e}")
-            return 'UNKNOWN', 'UNKNOWN'
-            
-    def _get_hdfs_path(self, country_code: str, city: str) -> Path:
-        """
-        Génère le chemin HDFS pour un pays/ville donnés
+            self.logger.error(f"❌ Erreur connexion Kafka: {e}")
+            return False
+    
+    def extract_location_info(self, message: Dict[str, Any]) -> tuple[str, str]:
+        """Extrait les informations de localisation du message"""
+        # Tentatives d'extraction de pays
+        country = None
+        city = None
         
-        Args:
-            country_code: Code pays (ex: FR, JP, US)
-            city: Nom de la ville
-            
-        Returns:
-            Path: Chemin complet vers le fichier alerts.json
-        """
-        # Nettoyer les noms pour le système de fichiers
-        safe_country = self._sanitize_filename(country_code)
-        safe_city = self._sanitize_filename(city)
+        # Extraction directe
+        if 'country' in message:
+            country = message['country']
+        elif 'location' in message and ',' in str(message['location']):
+            parts = str(message['location']).split(',')
+            if len(parts) >= 2:
+                city = parts[0].strip()
+                country = parts[1].strip()
         
-        country_dir = self.hdfs_base_path / safe_country
-        city_dir = country_dir / safe_city
+        # Extraction de ville
+        if not city and 'city' in message:
+            city = message['city']
+        elif not city and 'location' in message:
+            city = str(message['location']).split(',')[0].strip()
         
-        # Créer les répertoires si nécessaire
-        city_dir.mkdir(parents=True, exist_ok=True)
+        # Normalisation
+        country_code = normalize_country_name(country)
+        city_name = normalize_city_name(city)
         
-        return city_dir / "alerts.json"
-        
-    def _sanitize_filename(self, name: str) -> str:
-        """Nettoie un nom pour qu'il soit compatible système de fichiers"""
-        # Remplacer les caractères problématiques
-        import re
-        sanitized = re.sub(r'[<>:"/\\|?*]', '_', str(name))
-        sanitized = sanitized.replace(' ', '_')
-        return sanitized[:50]  # Limiter la longueur
-        
-    def _append_to_hdfs_file(self, file_path: Path, message: Dict):
-        """
-        Ajoute un message au fichier HDFS en format JSON Lines
-        
-        Args:
-            file_path: Chemin vers le fichier alerts.json
-            message: Message à ajouter
-        """
+        return country_code, city_name
+    
+    def process_message(self, topic: str, message: Dict[str, Any]) -> bool:
+        """Traite un message et l'ajoute au batch approprié"""
         try:
-            # Ajouter timestamp de traitement
+            # Extraction de la localisation
+            country, city = self.extract_location_info(message)
+            location_key = f"{country}/{city}"
+            
+            # Enrichissement du message avec metadata
             enriched_message = {
                 **message,
-                'hdfs_metadata': {
-                    'processed_at': datetime.now(timezone.utc).isoformat(),
-                    'consumer_id': 'hdfs-weather-consumer',
-                    'file_path': str(file_path)
-                }
+                'processed_at': datetime.utcnow().isoformat(),
+                'topic': topic,
+                'country_code': country,
+                'city_normalized': city
             }
             
-            # Écrire en mode append (une ligne JSON par message)
-            with open(file_path, 'a', encoding='utf-8') as f:
-                f.write(json.dumps(enriched_message, ensure_ascii=False) + '\n')
-                
-            logger.debug(f"📝 Message ajouté à {file_path}")
+            # Ajout au batch
+            self.batches[location_key].append(enriched_message)
+            
+            # Monitoring
+            message_size = len(json.dumps(enriched_message))
+            self.monitor.record_message(topic, message_size, location_key)
+            
+            self.logger.debug(f"📝 Message traité: {location_key}")
+            
+            return True
             
         except Exception as e:
-            logger.error(f"❌ Erreur écriture HDFS {file_path}: {e}")
-            self.error_count += 1
-            raise
-            
-    def _process_message(self, message):
-        """
-        Traite un message Kafka et l'enregistre dans HDFS
+            self.logger.error(f"❌ Erreur traitement message: {e}")
+            self.monitor.record_error()
+            return False
+    
+    def flush_batches(self, force: bool = False) -> int:
+        """Écrit les batches sur disque"""
+        current_time = time.time()
         
-        Args:
-            message: Message Kafka ConsumerRecord
-        """
+        # Vérification si flush nécessaire
+        should_flush = (
+            force or 
+            (current_time - self.last_flush) >= self.flush_interval or
+            any(len(batch) >= self.batch_size for batch in self.batches.values())
+        )
+        
+        if not should_flush:
+            return 0
+        
+        total_written = 0
+        
         try:
-            topic = message.topic
-            partition = message.partition
-            offset = message.offset
-            key = message.key
-            value = message.value
-            
-            if not value:
-                logger.warning("⚠️  Message vide ignoré")
-                return
+            for location_key, messages in list(self.batches.items()):
+                if not messages:
+                    continue
                 
-            # Extraire les informations de localisation
-            country_code, city = self._extract_location_info(value)
+                # Création du chemin HDFS
+                country, city = location_key.split('/')
+                hdfs_file_path = create_safe_path(
+                    str(self.hdfs_path), country, city, 'alerts.json'
+                )
+                
+                # Création des dossiers
+                hdfs_file_path.parent.mkdir(parents=True, exist_ok=True)
+                
+                # Écriture en mode append (JSONL)
+                with open(hdfs_file_path, 'a', encoding='utf-8') as f:
+                    for message in messages:
+                        json.dump(message, f, ensure_ascii=False, separators=(',', ':'))
+                        f.write('\n')
+                
+                total_written += len(messages)
+                self.monitor.record_batch(len(messages))
+                
+                self.logger.debug(f"💾 Batch écrit: {location_key} ({len(messages)} messages)")
+                
+                # Clear du batch
+                self.batches[location_key].clear()
             
-            # Générer le chemin HDFS
-            hdfs_path = self._get_hdfs_path(country_code, city)
+            self.last_flush = current_time
             
-            # Sauvegarder dans HDFS
-            self._append_to_hdfs_file(hdfs_path, value)
+            if total_written > 0:
+                self.logger.info(f"✅ Flush terminé: {total_written} messages écrits")
             
-            # Mise à jour des statistiques
-            self.processed_count += 1
-            self.countries_seen.add(country_code)
-            self.cities_seen.add(city)
-            
-            # Affichage périodique des progrès
-            if self.processed_count % 10 == 0:
-                print(f"📊 Traité: {self.processed_count} messages | "
-                      f"Pays: {len(self.countries_seen)} | "
-                      f"Villes: {len(self.cities_seen)}")
-                      
-            logger.debug(
-                f"✅ Message traité: {topic}[{partition}]@{offset} "
-                f"→ {country_code}/{city}"
-            )
+            return total_written
             
         except Exception as e:
-            logger.error(f"❌ Erreur traitement message: {e}")
-            self.error_count += 1
+            self.logger.error(f"❌ Erreur flush batches: {e}")
+            self.monitor.record_error()
+            return 0
+    
+    def print_monitoring_stats(self):
+        """Affiche les statistiques de monitoring"""
+        if not self.monitoring_enabled:
+            return
             
-    def _setup_signal_handlers(self):
-        """Configure les gestionnaires de signaux pour arrêt propre"""
-        def signal_handler(signum, frame):
-            print(f"\n🛑 Signal {signum} reçu, arrêt du consommateur...")
-            self.stop()
-            
-        signal.signal(signal.SIGINT, signal_handler)
-        signal.signal(signal.SIGTERM, signal_handler)
+        stats = self.monitor.get_current_stats()
         
-    def start_consuming(self):
-        """Démarre la consommation des messages Kafka"""
+        self.logger.info("📊 === STATISTIQUES PERFORMANCE ===")
+        self.logger.info(f"⏱️  Runtime: {stats['runtime_seconds']:.1f}s")
+        self.logger.info(f"📨 Messages traités: {stats['messages_processed']:,}")
+        self.logger.info(f"📦 Batches écrits: {stats['batches_written']:,}")
+        self.logger.info(f"💽 Données totales: {stats['total_bytes'] / 1024 / 1024:.1f} MB")
+        self.logger.info(f"⚡ Performance: {stats['messages_per_second']:.1f} msg/sec")
+        self.logger.info(f"🚨 Erreurs: {stats['error_count']}")
+        
+        if stats['top_locations']:
+            self.logger.info("🌍 Top Locations:")
+            for location, count in list(stats['top_locations'].items())[:5]:
+                self.logger.info(f"   • {location}: {count:,} messages")
+        
+        self.logger.info("=" * 50)
+    
+    def consume_messages(self, topics: List[str]) -> bool:
+        """Boucle principale de consommation des messages"""
+        if not self.connect_kafka(topics):
+            return False
+        
+        self.running = True
+        self.logger.info("🚀 Démarrage de la consommation des messages...")
+        
         try:
-            self._setup_consumer()
-            self._setup_signal_handlers()
-            
-            print("\n🚀 Démarrage de la consommation Kafka vers HDFS...")
-            print("💡 Appuyez sur Ctrl+C pour arrêter proprement")
-            print("-" * 60)
-            
-            self.running = True
-            
             while self.running:
                 try:
-                    # Consommer les messages avec timeout
-                    message_batch = self.consumer.poll(timeout_ms=1000)
+                    # Poll des messages
+                    message_batch = self.consumer.poll(
+                        timeout_ms=self.config['kafka']['consumer_timeout_ms']
+                    )
                     
                     if not message_batch:
-                        continue
+                        # Pas de nouveaux messages, flush périodique
+                        self.flush_batches()
                         
+                        # Stats monitoring
+                        if self.monitoring_enabled and self.monitor.should_print_stats():
+                            self.print_monitoring_stats()
+                        
+                        continue
+                    
+                    # Traitement des messages
                     for topic_partition, messages in message_batch.items():
+                        topic = topic_partition.topic
+                        
                         for message in messages:
                             if not self.running:
                                 break
-                            self._process_message(message)
-                            
-                except Exception as e:
-                    logger.error(f"❌ Erreur consommation: {e}")
-                    time.sleep(1)
+                                
+                            try:
+                                if message.value:
+                                    self.process_message(topic, message.value)
+                            except Exception as e:
+                                self.logger.error(f"❌ Erreur message: {e}")
+                                self.monitor.record_error()
                     
-        except KeyboardInterrupt:
-            print("\n🛑 Interruption utilisateur détectée")
-            self.stop()
+                    # Flush périodique
+                    self.flush_batches()
+                    
+                    # Stats monitoring
+                    if self.monitoring_enabled and self.monitor.should_print_stats():
+                        self.print_monitoring_stats()
+                    
+                except KafkaTimeoutError:
+                    self.logger.debug("⏰ Timeout Kafka, continuing...")
+                    continue
+                except KafkaError as e:
+                    self.logger.error(f"❌ Erreur Kafka: {e}")
+                    time.sleep(5)  # Pause avant retry
+                    continue
+                    
         except Exception as e:
-            logger.error(f"❌ Erreur fatale: {e}")
+            self.logger.error(f"❌ Erreur fatale dans consume_messages: {e}")
+            return False
+        finally:
             self.stop()
-            
-    def stop(self):
-        """Arrête le consommateur proprement"""
-        print("\n📊 STATISTIQUES FINALES:")
-        print(f"   📝 Messages traités: {self.processed_count}")
-        print(f"   ❌ Erreurs: {self.error_count}")
-        print(f"   🌍 Pays découverts: {len(self.countries_seen)}")
-        print(f"   🏙️  Villes découvertes: {len(self.cities_seen)}")
         
-        if self.countries_seen:
-            print(f"   📍 Pays: {', '.join(sorted(self.countries_seen))}")
+        return True
+    
+    def stop(self):
+        """Arrêt gracieux du consumer"""
+        if not self.running:
+            return
             
+        self.logger.info("🛑 Arrêt du consumer...")
         self.running = False
         
+        # Flush final des batches
+        final_count = self.flush_batches(force=True)
+        if final_count > 0:
+            self.logger.info(f"💾 Flush final: {final_count} messages")
+        
+        # Fermeture du consumer Kafka
         if self.consumer:
             try:
                 self.consumer.close()
-                print("✅ Consommateur fermé proprement")
+                self.logger.info("✅ Consumer Kafka fermé")
             except Exception as e:
-                logger.error(f"❌ Erreur fermeture: {e}")
-                
-        print("🗄️  Structure HDFS créée avec succès!")
-        self._display_hdfs_structure()
+                self.logger.error(f"⚠️ Erreur fermeture consumer: {e}")
         
-    def _display_hdfs_structure(self):
-        """Affiche la structure HDFS créée"""
-        print(f"\n📁 STRUCTURE HDFS GÉNÉRÉE ({self.hdfs_base_path}):")
-        print("-" * 50)
+        # Stats finales
+        if self.monitoring_enabled:
+            self.print_monitoring_stats()
         
-        try:
-            for country_dir in sorted(self.hdfs_base_path.iterdir()):
-                if country_dir.is_dir():
-                    print(f"🌍 {country_dir.name}/")
-                    for city_dir in sorted(country_dir.iterdir()):
-                        if city_dir.is_dir():
-                            alerts_file = city_dir / "alerts.json"
-                            if alerts_file.exists():
-                                size = alerts_file.stat().st_size
-                                lines = sum(1 for _ in open(alerts_file, 'r'))
-                                print(f"   🏙️  {city_dir.name}/")
-                                print(f"      📄 alerts.json ({lines} entrées, {size} bytes)")
-                                
-        except Exception as e:
-            logger.error(f"❌ Erreur affichage structure: {e}")
+        self.logger.info("✅ HDFS Consumer arrêté proprement")
 
+# ==================================================================================
+# CLI INTERFACE
+# ==================================================================================
+
+def create_argparser() -> argparse.ArgumentParser:
+    """Crée le parser d'arguments CLI"""
+    parser = argparse.ArgumentParser(
+        description="🌊📁 Kafka Weather Analytics - Exercice 7: HDFS Consumer & Distributed Storage",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Exemples d'utilisation:
+  python hdfs_consumer.py --hdfs-path "./hdfs-data" --topics geo_weather_stream
+  python hdfs_consumer.py --hdfs-path "./hdfs-data" --topics "weather_stream,geo_weather_stream" --monitoring
+  python hdfs_consumer.py --hdfs-path "./data-lake" --topics geo_weather_stream --batch-size 500 --flush-interval 10
+        """
+    )
+    
+    parser.add_argument(
+        '--hdfs-path',
+        type=str,
+        default='./hdfs-data',
+        help='Chemin de base pour le stockage HDFS (défaut: ./hdfs-data)'
+    )
+    
+    parser.add_argument(
+        '--topics',
+        type=str,
+        required=True,
+        help='Topics Kafka à consumer (séparés par des virgules)'
+    )
+    
+    parser.add_argument(
+        '--kafka-servers',
+        type=str,
+        default='localhost:9092',
+        help='Serveurs Kafka bootstrap (défaut: localhost:9092)'
+    )
+    
+    parser.add_argument(
+        '--group-id',
+        type=str,
+        default='hdfs_consumer_group',
+        help='Groupe de consumers Kafka (défaut: hdfs_consumer_group)'
+    )
+    
+    parser.add_argument(
+        '--batch-size',
+        type=int,
+        default=100,
+        help='Taille des batches pour écriture (défaut: 100)'
+    )
+    
+    parser.add_argument(
+        '--flush-interval',
+        type=int,
+        default=30,
+        help='Intervalle de flush en secondes (défaut: 30)'
+    )
+    
+    parser.add_argument(
+        '--monitoring',
+        action='store_true',
+        help='Active le monitoring de performance'
+    )
+    
+    parser.add_argument(
+        '--stats-interval',
+        type=int,
+        default=60,
+        help='Intervalle des stats en secondes (défaut: 60)'
+    )
+    
+    parser.add_argument(
+        '--log-level',
+        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
+        default='INFO',
+        help='Niveau de logging (défaut: INFO)'
+    )
+    
+    parser.add_argument(
+        '--offset-reset',
+        choices=['earliest', 'latest'],
+        default='earliest',
+        help='Position de départ du consumer (défaut: earliest)'
+    )
+    
+    return parser
 
 def main():
     """Point d'entrée principal"""
-    parser = argparse.ArgumentParser(
-        description="Consommateur Kafka vers HDFS pour données météo"
-    )
-    
-    parser.add_argument('--server', 
-                        default='localhost:9092',
-                        help='Serveur Kafka (défaut: localhost:9092)')
-    
-    parser.add_argument('--hdfs-path', 
-                        default='./hdfs-data',
-                        help='Chemin de base HDFS (défaut: ./hdfs-data)')
-    
-    parser.add_argument('--topics', 
-                        nargs='+',
-                        default=['weather_transformed', 'geo_weather_stream'],
-                        help='Topics à consommer (défaut: weather_transformed geo_weather_stream)')
-    
+    parser = create_argparser()
     args = parser.parse_args()
     
-    # Créer et démarrer le consommateur
-    consumer = HDFSWeatherConsumer(
-        kafka_server=args.server,
-        hdfs_base_path=args.hdfs_path,
-        topics=args.topics
-    )
+    # Parse topics
+    topics = [topic.strip() for topic in args.topics.split(',') if topic.strip()]
+    if not topics:
+        print("❌ Aucun topic spécifié")
+        return 1
+    
+    # Parse Kafka servers
+    kafka_servers = [server.strip() for server in args.kafka_servers.split(',')]
+    
+    # Configuration
+    config = {
+        'kafka': {
+            'bootstrap_servers': kafka_servers,
+            'group_id': args.group_id,
+            'auto_offset_reset': args.offset_reset,
+            'enable_auto_commit': True,
+            'auto_commit_interval_ms': 1000,
+            'consumer_timeout_ms': 5000,
+            'max_poll_records': 500,
+            'value_deserializer': lambda x: json.loads(x.decode('utf-8')) if x else None
+        },
+        'hdfs': {
+            'base_path': args.hdfs_path,
+            'batch_size': args.batch_size,
+            'flush_interval': args.flush_interval,
+            'max_file_size': 100 * 1024 * 1024,
+            'file_format': 'jsonl',
+            'create_directories': True
+        },
+        'monitoring': {
+            'enabled': args.monitoring,
+            'stats_interval': args.stats_interval,
+            'log_level': args.log_level,
+            'performance_tracking': True
+        }
+    }
     
     try:
-        consumer.start_consuming()
+        # Affichage de la configuration
+        print("🌊📁 Kafka Weather Analytics - Exercice 7: HDFS Consumer")
+        print("=" * 70)
+        print(f"📁 HDFS Path: {args.hdfs_path}")
+        print(f"📊 Topics: {', '.join(topics)}")
+        print(f"🔌 Kafka Servers: {', '.join(kafka_servers)}")
+        print(f"👥 Consumer Group: {args.group_id}")
+        print(f"📦 Batch Size: {args.batch_size}")
+        print(f"⏰ Flush Interval: {args.flush_interval}s")
+        print(f"📈 Monitoring: {'Activé' if args.monitoring else 'Désactivé'}")
+        print("=" * 70)
+        
+        # Initialisation du consumer
+        consumer = HDFSConsumer(config)
+        
+        # Démarrage de la consommation
+        success = consumer.consume_messages(topics)
+        
+        return 0 if success else 1
+        
+    except KeyboardInterrupt:
+        print("\n🛑 Arrêt demandé par l'utilisateur")
+        return 0
     except Exception as e:
-        logger.error(f"❌ Erreur démarrage: {e}")
-        sys.exit(1)
-
+        print(f"❌ Erreur fatale: {e}")
+        import traceback
+        traceback.print_exc()
+        return 1
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
