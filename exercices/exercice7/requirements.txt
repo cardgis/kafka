@@ -1,0 +1,11 @@
+# Requirements for Exercice 7 - HDFS Consumer and Distributed Storage
+
+# Kafka Client
+kafka-python>=2.0.0
+
+# Data Processing
+pandas>=2.0.0
+pathlib2>=2.3.7
+
+# Utilities
+python-dateutil>=2.8.0
