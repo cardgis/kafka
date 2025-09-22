@@ -1,2 +1,0 @@
-# Script pour lire les messages geo_weather_stream
-& ".\kafka_2.13-3.9.1\bin\windows\kafka-console-consumer.bat" --topic geo_weather_stream --from-beginning --bootstrap-server localhost:9092 --max-messages 3
