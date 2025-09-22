@@ -1,0 +1,53 @@
+# Kafka et fichiers temporaires
+kafka_2.13-3.9.1/logs/
+kafka_2.13-3.9.1/zookeeper-data/
+kafka_2.13-3.9.1/kafka-logs/
+*.log
+*.tmp
+*.pid
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Spark
+spark-warehouse/
+metastore_db/
+derby.log
+
+# HDFS
+hdfs-data/
+
+# Java
+*.class
+*.jar
+!kafka_2.13-3.9.1/libs/*.jar
+hs_err_pid*
+
+# Données temporaires
+/tmp/
+*.csv
+*.json.bak
