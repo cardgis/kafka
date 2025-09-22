@@ -1,216 +1,206 @@
-# Exercice 8: Visualisations des Logs HDFS
+# 📊 Exercice 8: Visualisation et Agrégation des Logs Météo
 
-## 📊 Objectif
-Créer un système de visualisation et d'analyse des données météo stockées dans la structure HDFS pour générer des dashboards interactifs et des rapports d'analyse.
+## 🎯 Objectif
+Créer des visualisations avancées des données météorologiques stockées dans HDFS et implémenter des dashboards BI pour l'analyse des tendances et alertes.
 
-## 🏗️ Architecture
-```
-weather_visualizer.py
-├── HDFSWeatherAnalyzer
-│   ├── load_hdfs_data() → Lecture structure HDFS complète
-│   ├── create_dataframe() → Conversion pandas pour analyse
-│   ├── generate_visualizations() → Création graphiques
-│   └── generate_report() → Rapport HTML interactif
-└── Visualisations
-    ├── Température par pays
-    ├── Vitesse du vent par pays  
-    ├── Distribution des alertes
-    ├── Codes météo par pays
-    ├── Vue géographique
-    ├── Analyse temporelle
-    └── Dashboard récapitulatif
-```
+## 📋 Spécifications
 
-## 📈 Types de Visualisations
+### **Visualisations Requises**
+1. **Évolution de la température** au fil du temps
+2. **Évolution de la vitesse du vent** 
+3. **Nombre d'alertes vent et chaleur** par niveau
+4. **Code météo le plus fréquent** par pays
+5. **Distribution géographique** des alertes
+6. **Tendances saisonnières** et patterns
+7. **Dashboard interactif** pour exploration
 
-### 1. Analyse des Températures
-- **Box plots** par pays avec quartiles et outliers
-- **Ligne de moyenne globale** pour comparaison
-- **Top 5 pays** les plus chauds/froids
-
-### 2. Analyse du Vent
-- **Graphiques en barres** vitesse moyenne vs maximale
-- **Distribution des directions** du vent (rose des vents)
-- **Corrélation** température-vent par pays
-
-### 3. Distribution des Alertes
-- **Graphique en camembert** global des niveaux d'alerte
-- **Barres empilées** par pays
-- **Heatmap** alertes par région géographique
-
-### 4. Codes Météo WMO
-- **Heatmap** codes météo par pays
-- **Mapping complet** des descriptions WMO
-- **Fréquence** des phénomènes météo
-
-### 5. Vue Géographique
-- **Scatter plot** latitude/longitude avec température
-- **Bulles proportionnelles** à la vitesse du vent
-- **Nombre de villes** par pays
-
-### 6. Analyse Temporelle
-- **Séries temporelles** température/vent
-- **Évolution** par pays sur la timeline
-- **Tendances** et patterns temporels
-
-## 🔧 Installation
-
-### Prérequis
-- Données HDFS de l'exercice 7
-- Python 3.7+ avec packages scientifiques
-- Structure HDFS: `/hdfs-data/{country}/{city}/alerts.json`
-
-### Dépendances
-```bash
-pip install -r requirements.txt
-```
+### **Fonctionnalités Avancées**
+- Export multi-format (PNG, HTML, CSV)
+- Filtrage par date, pays, type d'alerte
+- Agrégations temporelles (horaire, journalière, hebdomadaire)
+- Alertes prédictives basées sur les tendances
+- Rapports automatisés
 
 ## 🚀 Utilisation
 
-### Démarrage rapide
+### **Génération de Toutes les Visualisations**
 ```bash
-# Lancer le test complet avec copie données + visualisations
-.\test-visualizations.ps1
-
-# Ou manuellement:
-python weather_visualizer.py --hdfs-path ./hdfs-data --report
+python weather_visualizer.py --input "./hdfs-data"
 ```
 
-### Options avancées
+### **Visualisation Spécifique**
 ```bash
-# Répertoire HDFS personnalisé
-python weather_visualizer.py --hdfs-path /path/to/hdfs --output-dir ./my-charts
+# Température seulement
+python weather_visualizer.py --input "./hdfs-data" --type temperature
 
-# Générer seulement les graphiques (sans rapport HTML)
-python weather_visualizer.py --hdfs-path ./hdfs-data --output-dir ./charts
+# Alertes par pays
+python weather_visualizer.py --input "./hdfs-data" --type alerts --country FR
 
-# Avec rapport HTML complet
-python weather_visualizer.py --hdfs-path ./hdfs-data --report
+# Dashboard interactif
+python weather_visualizer.py --input "./hdfs-data" --dashboard
 ```
 
-## 📊 Sorties Générées
+### **Export Personnalisé**
+```bash
+# Export HTML interactif
+python weather_visualizer.py --input "./hdfs-data" --output "./reports" --format html
 
-### Visualisations PNG (300 DPI)
-- `temperature_by_country.png` - Distribution températures par pays
-- `wind_by_country.png` - Vitesse du vent par pays
-- `alert_distribution.png` - Niveaux d'alerte global + par pays
-- `weather_codes_by_country.png` - Heatmap codes météo WMO
-- `geographic_overview.png` - 4 vues géographiques combinées
-- `temporal_analysis.png` - Évolution temporelle
-- `dashboard_overview.png` - Dashboard complet récapitulatif
-
-### Rapport HTML Interactif
-- `rapport_meteo_hdfs.html` - Rapport complet avec:
-  - Statistiques générales automatisées
-  - Toutes les visualisations intégrées
-  - Design responsive et professionnel
-  - Navigation fluide entre sections
-
-## 📋 Métriques Calculées
-
-### Statistiques Générales
-- **Total enregistrements** traités
-- **Nombre de pays/villes** uniques
-- **Température**: moyenne, min, max globales
-- **Vent**: vitesse moyenne et maximale
-- **Distribution des alertes** par niveau
-
-### Analyses Géographiques
-- **Top 5 pays** par température moyenne
-- **Top 5 pays** par vitesse du vent
-- **Correlation** température-vent par localisation
-- **Density mapping** des observations
-
-### Analyses Météorologiques
-- **Codes WMO** les plus fréquents
-- **Patterns saisonniers** (si données temporelles)
-- **Alertes critiques** par région
-- **Phénomènes extrêmes** identifiés
-
-## 🎨 Personnalisation
-
-### Styles Graphiques
-- **Palette de couleurs** Seaborn husl
-- **Style** seaborn-v0_8 moderne
-- **Résolution** 300 DPI pour impression
-- **Format** PNG optimisé
-
-### Template HTML
-- **Design responsive** compatible mobile
-- **CSS moderne** avec animations
-- **Grid layout** pour statistiques
-- **Cards design** pour métriques clés
-
-## 🔄 Intégration Pipeline
-
-### Sources de données
-- **Exercice 7**: Structure HDFS `/hdfs-data/{country}/{city}/alerts.json`
-- **Format**: JSON Lines avec métadonnées enrichies
-- **Compatibilité**: Tous les topics précédents via HDFS consumer
-
-### Architecture complète
-```
-Exercice 3: WeatherProducer → weather_stream
-Exercice 4: Spark Transform → weather_transformed  
-Exercice 5: Aggregations → weather_aggregates
-Exercice 6: Geo Producer → geo_weather_stream
-Exercice 7: HDFS Consumer → /hdfs-data/{country}/{city}/
-Exercice 8: Visualizer → 📊 Dashboard Analytics
+# Export CSV pour analyse
+python weather_visualizer.py --input "./hdfs-data" --export-data
 ```
 
-## 📈 Cas d'Usage
+## 📊 Types de Visualisations
 
-### Monitoring Opérationnel
-- **Surveillance temps réel** des alertes météo
-- **Détection anomalies** par région
-- **Reporting automatisé** pour décideurs
+### 1. **Analyse Temporelle**
+- Séries temporelles température/vent
+- Tendances et saisonnalité
+- Patterns journaliers/hebdomadaires
 
-### Analyse Historique
-- **Trends climatiques** par pays/ville
-- **Comparaisons géographiques** détaillées
-- **Patterns temporels** et saisonnalité
+### 2. **Analyse Géographique**
+- Heatmaps par pays/ville
+- Distribution géographique des alertes
+- Comparaisons régionales
 
-### Recherche & Développement
-- **Validation des modèles** météo
-- **Analyse de corrélations** complexes
-- **Benchmarking international** des conditions
+### 3. **Analyse des Alertes**
+- Distribution par niveau (0, 1, 2)
+- Évolution des alertes dans le temps
+- Corrélations vent/température
 
-## 🛠️ Extensions Possibles
+### 4. **Analytics Avancées**
+- Clustering des patterns météo
+- Prédictions de tendances
+- Détection d'anomalies
 
-### Visualisations Avancées
-- [ ] Cartes géographiques interactives (Folium)
-- [ ] Animations temporelles (matplotlib.animation)
-- [ ] 3D scatter plots pour corrélations multiples
-- [ ] Heatmaps temporelles (calendrier)
+## 🛠️ Architecture Technique
 
-### Analyses Statistiques
-- [ ] Régression linéaire température-vent
-- [ ] Clustering géographique K-means
-- [ ] Détection d'outliers statistiques
-- [ ] Prédictions court-terme
+### **Input Data**
+- Source: HDFS structure `/hdfs-data/{country}/{city}/alerts.json`
+- Format: JSON Lines avec weather_transformed data
+- Colonnes: timestamp, temperature, windspeed, wind_alert_level, heat_alert_level
 
-### Dashboard Interactif
-- [ ] Interface web Streamlit/Dash
-- [ ] Filtres dynamiques par pays/période
-- [ ] Exports PDF automatisés
-- [ ] Alertes en temps réel
+### **Processing Pipeline**
+1. **Data Loading**: Lecture récursive HDFS structure
+2. **Data Cleaning**: Validation et nettoyage des données
+3. **Aggregation**: Calculs statistiques et groupements
+4. **Visualization**: Génération graphiques avec matplotlib/seaborn
+5. **Export**: Sauvegarde multi-format
 
-### Intégration Business Intelligence
-- [ ] Connecteurs Tableau/Power BI
-- [ ] APIs REST pour données
-- [ ] Webhooks pour notifications
-- [ ] Intégration bases de données
+### **Output Formats**
+- **PNG**: Graphiques haute résolution
+- **HTML**: Dashboards interactifs
+- **CSV**: Données agrégées pour analyse
+- **JSON**: Métadonnées et statistiques
 
-## 📊 Performance
+## 📈 Métriques Calculées
 
-### Métriques typiques
-- **Chargement données**: ~100ms pour 1000 enregistrements
-- **Génération graphiques**: ~5-10s pour 7 visualisations
-- **Rapport HTML**: ~1-2s pour génération template
-- **Mémoire**: ~100-200MB pour datasets moyens
+### **Statistiques Temporelles**
+- Moyenne, min, max température par période
+- Évolution vitesse du vent
+- Fréquence des alertes par type
 
-### Optimisations
-- **Lazy loading** des données par chunks
-- **Caching** pandas DataFrames
-- **Vectorisation** numpy pour calculs
-- **Compression** PNG avec optimisation
+### **Statistiques Géographiques**
+- Température moyenne par pays/ville
+- Distribution des codes météo
+- Hotspots d'alertes climatiques
+
+### **Indicateurs de Performance**
+- Précision des prédictions d'alertes
+- Trends accuracy sur 7/30 jours
+- Coverage géographique des données
+
+## 🔧 Configuration
+
+### **Paramètres de Visualisation**
+```python
+# Configuration dans weather_visualizer.py
+VISUALIZATION_CONFIG = {
+    'figure_size': (15, 10),
+    'dpi': 300,
+    'style': 'seaborn-v0_8',
+    'color_palette': 'viridis',
+    'export_formats': ['png', 'html'],
+    'interactive': True
+}
+```
+
+### **Alertes et Seuils**
+```python
+# Seuils d'alertes configurables
+ALERT_THRESHOLDS = {
+    'wind': {'level_1': 10, 'level_2': 20},  # m/s
+    'heat': {'level_1': 25, 'level_2': 35}   # °C
+}
+```
+
+## 🎯 Résultats Attendus
+
+Après exécution, vous obtiendrez :
+
+1. **Dossier `visualizations/`** avec tous les graphiques
+2. **Rapport HTML interactif** avec dashboard complet
+3. **Fichiers CSV** avec données agrégées
+4. **Statistiques JSON** avec métriques détaillées
+
+## 📊 Exemples de Visualisations
+
+### **1. Évolution Température**
+- Line chart avec tendances
+- Heatmap par pays/mois
+- Box plots pour distribution
+
+### **2. Analyse du Vent**
+- Séries temporelles vitesse
+- Rose des vents par région
+- Corrélation vent/température
+
+### **3. Dashboard Alertes**
+- Barres par niveau d'alerte
+- Évolution temporelle des alertes
+- Geographic scatter plot
+
+### **4. Analytics Avancées**
+- Clustering analysis
+- Prediction models
+- Anomaly detection
+
+## 🚀 Intégration
+
+### **Avec Exercice 7 (HDFS Consumer)**
+```bash
+# 1. Produire des données (Exercice 6)
+cd ../exercice6
+python geo_weather.py Paris France --continuous
+
+# 2. Consumer vers HDFS (Exercice 7)
+cd ../exercice7
+python hdfs_consumer.py --hdfs-path "./hdfs-data" --topics geo_weather_stream
+
+# 3. Visualisation (Exercice 8)
+cd ../exercice8
+python weather_visualizer.py --input "./hdfs-data"
+```
+
+### **Pipeline Complet**
+1. **Production**: Données météo temps réel
+2. **Streaming**: Kafka + Spark transformations
+3. **Storage**: HDFS partitioning géographique
+4. **Analytics**: Visualisations et BI dashboards
+
+## 📚 Dépendances
+
+```bash
+pip install pandas matplotlib seaborn plotly dash streamlit
+pip install numpy scipy scikit-learn
+```
+
+## 🎊 Validation
+
+Pour valider l'exercice :
+1. Générer visualisations complètes
+2. Vérifier exports multi-format
+3. Tester filtres et agrégations
+4. Valider dashboard interactif
+
+---
+
+**🎯 Cet exercice démontre la capacité à créer des dashboards BI professionnels et des analytics avancées sur des données de streaming en temps réel.**

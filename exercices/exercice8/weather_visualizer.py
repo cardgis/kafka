@@ -1,784 +1,1026 @@
 #!/usr/bin/env python3
 """
-Exercice 8: Visualisations des logs HDFS
-=========================================
+🌊📊 Kafka Weather Analytics - Exercice 8: Advanced BI Visualizations
+=====================================================================
 
-Dashboard de visualisation des données météo stockées dans HDFS.
-Analyse des températures, vents, alertes par niveau et codes météo par pays.
+Système de visualisation et d'analyse BI avancée pour les données météorologiques
+stockées dans la structure HDFS générée par l'exercice 7.
 
 Fonctionnalités:
-- Analyse des données HDFS par pays/ville
-- Graphiques température et vent
-- Distribution des alertes par niveau
-- Codes météo par pays
-- Dashboard interactif
+- Dashboards interactifs avec Plotly/Dash
+- Analyses temporelles et géographiques
+- Alertes prédictives et détection d'anomalies
+- Export multi-format (PNG, HTML, CSV, JSON)
+- Agrégations multi-dimensionnelles
 
-Author: Assistant
-Date: 2024
+Usage:
+    python weather_visualizer.py --input "./hdfs-data"
+    python weather_visualizer.py --input "./hdfs-data" --dashboard
+    python weather_visualizer.py --input "./hdfs-data" --export-data
 """
 
 import json
 import os
+import sys
 import argparse
+import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Tuple, Any
+import warnings
+warnings.filterwarnings('ignore')
+
+# Analytics and Visualization Stack
 import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
-from datetime import datetime
 import numpy as np
-from collections import defaultdict, Counter
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+import seaborn as sns
+from matplotlib.gridspec import GridSpec
+import plotly.graph_objects as go
+import plotly.express as px
+from plotly.subplots import make_subplots
+import plotly.offline as pyo
 
-# Configuration matplotlib pour de beaux graphiques
-plt.style.use('seaborn-v0_8')
-sns.set_palette("husl")
+# Scientific Computing
+from scipy import stats
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import silhouette_score
 
+# ==================================================================================
+# CONFIGURATION & CONSTANTS
+# ==================================================================================
 
-class HDFSWeatherAnalyzer:
-    """Analyseur et visualiseur de données météo HDFS"""
+# Visualization Configuration
+VISUALIZATION_CONFIG = {
+    'figure_size': (20, 12),
+    'dpi': 300,
+    'style': 'seaborn-v0_8-darkgrid',
+    'color_palette': 'viridis',
+    'export_formats': ['png', 'html'],
+    'interactive': True,
+    'font_size': 12,
+    'title_size': 16
+}
+
+# Alert Thresholds
+ALERT_THRESHOLDS = {
+    'wind': {'level_1': 10, 'level_2': 20},  # m/s
+    'heat': {'level_1': 25, 'level_2': 35}   # °C
+}
+
+# Color Schemes
+COUNTRY_COLORS = {
+    'FR': '#FF6B6B', 'DE': '#4ECDC4', 'GB': '#45B7D1', 
+    'US': '#96CEB4', 'JP': '#FFEAA7', 'UNKNOWN': '#DDA0DD'
+}
+
+ALERT_COLORS = {
+    'wind_alert_0': '#2ECC71', 'wind_alert_1': '#F39C12', 'wind_alert_2': '#E74C3C',
+    'heat_alert_0': '#3498DB', 'heat_alert_1': '#E67E22', 'heat_alert_2': '#C0392B'
+}
+
+# ==================================================================================
+# DATA PROCESSING ENGINE
+# ==================================================================================
+
+class WeatherDataProcessor:
+    """Engine de traitement des données météorologiques HDFS"""
     
-    def __init__(self, hdfs_path: str = "./hdfs-data"):
-        """
-        Initialise l'analyseur HDFS
-        
-        Args:
-            hdfs_path: Chemin vers la structure HDFS
-        """
+    def __init__(self, hdfs_path: str):
         self.hdfs_path = Path(hdfs_path)
-        self.data = []
-        self.countries_data = defaultdict(list)
-        self.cities_data = defaultdict(list)
+        self.logger = self._setup_logging()
+        self.data = pd.DataFrame()
+        self.stats = {}
         
-        print("📊 EXERCICE 8 - VISUALISATIONS DONNÉES MÉTÉO HDFS")
-        print("=" * 60)
+    def _setup_logging(self) -> logging.Logger:
+        """Configuration du système de logging"""
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.FileHandler('weather_analytics.log'),
+                logging.StreamHandler(sys.stdout)
+            ]
+        )
+        return logging.getLogger(__name__)
+    
+    def load_hdfs_data(self) -> pd.DataFrame:
+        """Charge toutes les données HDFS dans un DataFrame unifié"""
+        self.logger.info(f"🔍 Scanning HDFS structure: {self.hdfs_path}")
         
-        if not self.hdfs_path.exists():
-            raise FileNotFoundError(f"❌ Répertoire HDFS non trouvé: {hdfs_path}")
-            
-        print(f"📁 Répertoire HDFS: {self.hdfs_path.absolute()}")
+        all_data = []
+        countries_found = []
+        cities_found = []
         
-    def load_hdfs_data(self):
-        """Charge toutes les données depuis la structure HDFS"""
-        print("\n🔄 Chargement des données HDFS...")
-        
-        total_files = 0
-        total_records = 0
-        
+        # Parcours récursif de la structure HDFS
         for country_dir in self.hdfs_path.iterdir():
             if not country_dir.is_dir():
                 continue
                 
             country_code = country_dir.name
-            print(f"🌍 Traitement pays: {country_code}")
+            countries_found.append(country_code)
             
             for city_dir in country_dir.iterdir():
                 if not city_dir.is_dir():
                     continue
                     
                 city_name = city_dir.name
+                cities_found.append(f"{city_name}, {country_code}")
+                
+                # Lecture du fichier alerts.json
                 alerts_file = city_dir / "alerts.json"
-                
-                if not alerts_file.exists():
-                    continue
-                    
-                try:
-                    with open(alerts_file, 'r', encoding='utf-8') as f:
-                        for line_num, line in enumerate(f, 1):
-                            try:
-                                record = json.loads(line.strip())
-                                
-                                # Enrichir avec métadonnées géographiques
-                                record['country_code'] = country_code
-                                record['city_name'] = city_name
-                                record['file_path'] = str(alerts_file)
-                                
-                                self.data.append(record)
-                                self.countries_data[country_code].append(record)
-                                self.cities_data[f"{country_code}_{city_name}"].append(record)
-                                
-                                total_records += 1
-                                
-                            except json.JSONDecodeError as e:
-                                print(f"⚠️  Erreur JSON ligne {line_num} dans {alerts_file}: {e}")
-                                
-                    total_files += 1
-                    print(f"   🏙️  {city_name}: {sum(1 for _ in open(alerts_file))} entrées")
-                    
-                except Exception as e:
-                    print(f"❌ Erreur lecture {alerts_file}: {e}")
-                    
-        print(f"\n✅ Chargement terminé:")
-        print(f"   📄 Fichiers traités: {total_files}")
-        print(f"   📊 Enregistrements: {total_records}")
-        print(f"   🌍 Pays: {len(self.countries_data)}")
-        print(f"   🏙️  Villes: {len(self.cities_data)}")
+                if alerts_file.exists():
+                    try:
+                        with open(alerts_file, 'r', encoding='utf-8') as f:
+                            for line in f:
+                                if line.strip():
+                                    record = json.loads(line.strip())
+                                    # Enrichissement avec métadonnées géographiques
+                                    record['country'] = country_code
+                                    record['city'] = city_name
+                                    record['location'] = f"{city_name}, {country_code}"
+                                    all_data.append(record)
+                                    
+                    except Exception as e:
+                        self.logger.warning(f"⚠️ Erreur lecture {alerts_file}: {e}")
         
-        return total_records > 0
-        
-    def create_dataframe(self) -> pd.DataFrame:
-        """Convertit les données en DataFrame pandas pour l'analyse"""
-        if not self.data:
-            raise ValueError("❌ Aucune donnée chargée. Appelez load_hdfs_data() d'abord.")
+        # Conversion en DataFrame
+        if all_data:
+            self.data = pd.DataFrame(all_data)
+            self._process_dataframe()
             
-        records = []
-        
-        for item in self.data:
-            try:
-                # Extraire les données météo
-                weather = item.get('weather', {})
-                location = item.get('location', {})
-                metadata = item.get('metadata', {})
-                hdfs_meta = item.get('hdfs_metadata', {})
-                
-                record = {
-                    'country_code': item.get('country_code', 'UNKNOWN'),
-                    'city_name': item.get('city_name', 'UNKNOWN'),
-                    'country': location.get('country', 'Unknown'),
-                    'city': location.get('city', 'Unknown'),
-                    'latitude': location.get('latitude', 0.0),
-                    'longitude': location.get('longitude', 0.0),
-                    'temperature': weather.get('temperature', 0.0),
-                    'windspeed': weather.get('windspeed', 0.0),
-                    'winddirection': weather.get('winddirection', 0),
-                    'weathercode': weather.get('weathercode', 0),
-                    'is_day': weather.get('is_day', 1),
-                    'timestamp': metadata.get('timestamp', ''),
-                    'processed_at': hdfs_meta.get('processed_at', ''),
-                    'source': metadata.get('source', 'unknown')
-                }
-                
-                # Calculer niveau d'alerte (comme dans exercice 4)
-                alert_level = self._calculate_alert_level(
-                    record['temperature'], 
-                    record['windspeed']
-                )
-                record['alert_level'] = alert_level
-                
-                records.append(record)
-                
-            except Exception as e:
-                print(f"⚠️  Erreur traitement enregistrement: {e}")
-                continue
-                
-        df = pd.DataFrame(records)
-        
-        # Convertir les timestamps
-        for col in ['timestamp', 'processed_at']:
-            if col in df.columns:
-                df[col] = pd.to_datetime(df[col], errors='coerce')
-                
-        print(f"📊 DataFrame créé: {len(df)} lignes, {len(df.columns)} colonnes")
-        return df
-        
-    def _calculate_alert_level(self, temperature: float, windspeed: float) -> str:
-        """Calcule le niveau d'alerte basé sur température et vent"""
-        # Logique identique à l'exercice 4
-        temp_alert = 0
-        wind_alert = 0
-        
-        # Alerte température
-        if temperature >= 35:
-            temp_alert = 3  # Critique
-        elif temperature >= 30:
-            temp_alert = 2  # Élevée
-        elif temperature >= 25:
-            temp_alert = 1  # Modérée
-        elif temperature <= -10:
-            temp_alert = 3  # Critique (froid)
-        elif temperature <= 0:
-            temp_alert = 2  # Élevée (froid)
-        elif temperature <= 5:
-            temp_alert = 1  # Modérée (froid)
+            self.logger.info(f"✅ Données chargées: {len(self.data)} records")
+            self.logger.info(f"🌍 Pays: {sorted(set(countries_found))}")
+            self.logger.info(f"🏙️ Villes: {len(set(cities_found))} villes")
             
-        # Alerte vent
-        if windspeed >= 100:
-            wind_alert = 3  # Critique
-        elif windspeed >= 70:
-            wind_alert = 2  # Élevée
-        elif windspeed >= 40:
-            wind_alert = 1  # Modérée
-            
-        # Niveau final (maximum des deux)
-        max_alert = max(temp_alert, wind_alert)
-        
-        if max_alert == 3:
-            return "CRITIQUE"
-        elif max_alert == 2:
-            return "ÉLEVÉE"
-        elif max_alert == 1:
-            return "MODÉRÉE"
         else:
-            return "NORMALE"
+            self.logger.error("❌ Aucune donnée trouvée dans la structure HDFS")
+            self.data = pd.DataFrame()
             
-    def generate_visualizations(self, output_dir: str = "./visualizations"):
-        """Génère toutes les visualisations"""
-        output_path = Path(output_dir)
-        output_path.mkdir(exist_ok=True)
-        
-        if not self.data:
-            print("❌ Aucune donnée à visualiser")
+        return self.data
+    
+    def _process_dataframe(self):
+        """Traitement et nettoyage du DataFrame"""
+        if self.data.empty:
             return
             
-        df = self.create_dataframe()
+        # Conversion des types
+        self.data['timestamp'] = pd.to_datetime(self.data['timestamp'])
+        self.data['temperature'] = pd.to_numeric(self.data['temperature'], errors='coerce')
+        self.data['windspeed'] = pd.to_numeric(self.data['windspeed'], errors='coerce')
+        self.data['wind_alert_level'] = pd.to_numeric(self.data['wind_alert_level'], errors='coerce')
+        self.data['heat_alert_level'] = pd.to_numeric(self.data['heat_alert_level'], errors='coerce')
         
-        print(f"\n🎨 Génération des visualisations dans {output_path}...")
+        # Création de colonnes dérivées
+        self.data['date'] = self.data['timestamp'].dt.date
+        self.data['hour'] = self.data['timestamp'].dt.hour
+        self.data['day_of_week'] = self.data['timestamp'].dt.day_name()
+        self.data['month'] = self.data['timestamp'].dt.month_name()
         
-        # 1. Analyse température par pays
-        self._plot_temperature_by_country(df, output_path)
+        # Calcul d'indicateurs composites
+        self.data['total_alert_level'] = self.data['wind_alert_level'] + self.data['heat_alert_level']
+        self.data['has_alert'] = (self.data['wind_alert_level'] > 0) | (self.data['heat_alert_level'] > 0)
         
-        # 2. Analyse vent par pays
-        self._plot_wind_by_country(df, output_path)
+        # Suppression des valeurs aberrantes
+        initial_count = len(self.data)
+        self.data = self.data.dropna(subset=['temperature', 'windspeed'])
+        self.data = self.data[
+            (self.data['temperature'] >= -50) & (self.data['temperature'] <= 60) &
+            (self.data['windspeed'] >= 0) & (self.data['windspeed'] <= 200)
+        ]
+        final_count = len(self.data)
         
-        # 3. Distribution des alertes
-        self._plot_alert_distribution(df, output_path)
-        
-        # 4. Codes météo par pays
-        self._plot_weather_codes(df, output_path)
-        
-        # 5. Vue d'ensemble géographique
-        self._plot_geographic_overview(df, output_path)
-        
-        # 6. Analyse temporelle
-        self._plot_temporal_analysis(df, output_path)
-        
-        # 7. Dashboard récapitulatif
-        self._create_dashboard(df, output_path)
-        
-        print(f"✅ Visualisations générées dans {output_path}")
-        
-    def _plot_temperature_by_country(self, df: pd.DataFrame, output_path: Path):
-        """Graphique température par pays"""
-        plt.figure(figsize=(12, 8))
-        
-        # Box plot des températures par pays
-        countries = df['country_code'].value_counts().head(10).index
-        df_filtered = df[df['country_code'].isin(countries)]
-        
-        sns.boxplot(data=df_filtered, x='country_code', y='temperature')
-        plt.title('🌡️ Distribution des Températures par Pays', fontsize=16, fontweight='bold')
-        plt.xlabel('Code Pays', fontsize=12)
-        plt.ylabel('Température (°C)', fontsize=12)
-        plt.xticks(rotation=45)
-        
-        # Ajouter ligne température moyenne globale
-        mean_temp = df['temperature'].mean()
-        plt.axhline(y=mean_temp, color='red', linestyle='--', alpha=0.7, 
-                   label=f'Moyenne globale: {mean_temp:.1f}°C')
-        plt.legend()
-        
-        plt.tight_layout()
-        plt.savefig(output_path / "temperature_by_country.png", dpi=300, bbox_inches='tight')
-        plt.close()
-        
-        print("   ✅ temperature_by_country.png")
-        
-    def _plot_wind_by_country(self, df: pd.DataFrame, output_path: Path):
-        """Graphique vent par pays"""
-        plt.figure(figsize=(12, 8))
-        
-        # Graphique barres vitesse moyenne du vent par pays
-        wind_by_country = df.groupby('country_code')['windspeed'].agg(['mean', 'max']).reset_index()
-        wind_by_country = wind_by_country.sort_values('mean', ascending=False).head(10)
-        
-        x = range(len(wind_by_country))
-        width = 0.35
-        
-        plt.bar([i - width/2 for i in x], wind_by_country['mean'], width, 
-               label='Vitesse moyenne', alpha=0.8)
-        plt.bar([i + width/2 for i in x], wind_by_country['max'], width, 
-               label='Vitesse maximale', alpha=0.8)
-        
-        plt.title('💨 Vitesse du Vent par Pays', fontsize=16, fontweight='bold')
-        plt.xlabel('Code Pays', fontsize=12)
-        plt.ylabel('Vitesse du Vent (km/h)', fontsize=12)
-        plt.xticks(x, wind_by_country['country_code'], rotation=45)
-        plt.legend()
-        
-        plt.tight_layout()
-        plt.savefig(output_path / "wind_by_country.png", dpi=300, bbox_inches='tight')
-        plt.close()
-        
-        print("   ✅ wind_by_country.png")
-        
-    def _plot_alert_distribution(self, df: pd.DataFrame, output_path: Path):
-        """Distribution des niveaux d'alerte"""
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
-        
-        # Graphique en camembert global
-        alert_counts = df['alert_level'].value_counts()
-        colors = ['green', 'yellow', 'orange', 'red'][:len(alert_counts)]
-        
-        ax1.pie(alert_counts.values, labels=alert_counts.index, autopct='%1.1f%%',
-               colors=colors, startangle=90)
-        ax1.set_title('🚨 Distribution Globale des Alertes', fontsize=14, fontweight='bold')
-        
-        # Graphique barres par pays
-        alert_by_country = pd.crosstab(df['country_code'], df['alert_level'])
-        alert_by_country.plot(kind='bar', stacked=True, ax=ax2, 
-                             color=colors[:len(alert_by_country.columns)])
-        ax2.set_title('🚨 Alertes par Pays', fontsize=14, fontweight='bold')
-        ax2.set_xlabel('Code Pays')
-        ax2.set_ylabel('Nombre d\'Alertes')
-        ax2.tick_params(axis='x', rotation=45)
-        ax2.legend(title='Niveau d\'Alerte')
-        
-        plt.tight_layout()
-        plt.savefig(output_path / "alert_distribution.png", dpi=300, bbox_inches='tight')
-        plt.close()
-        
-        print("   ✅ alert_distribution.png")
-        
-    def _plot_weather_codes(self, df: pd.DataFrame, output_path: Path):
-        """Codes météo par pays"""
-        plt.figure(figsize=(14, 8))
-        
-        # Mapping des codes météo WMO
-        weather_code_mapping = {
-            0: "Ciel dégagé",
-            1: "Principalement dégagé", 
-            2: "Partiellement nuageux",
-            3: "Couvert",
-            45: "Brouillard",
-            48: "Brouillard givrant",
-            51: "Bruine légère",
-            53: "Bruine modérée",
-            55: "Bruine forte",
-            61: "Pluie légère",
-            63: "Pluie modérée",
-            65: "Pluie forte",
-            71: "Neige légère",
-            73: "Neige modérée",
-            75: "Neige forte",
-            95: "Orage"
+        if initial_count > final_count:
+            self.logger.info(f"🧹 Nettoyage: {initial_count - final_count} records supprimés")
+    
+    def compute_statistics(self) -> Dict[str, Any]:
+        """Calcule des statistiques descriptives complètes"""
+        if self.data.empty:
+            return {}
+            
+        stats = {
+            'general': {
+                'total_records': len(self.data),
+                'date_range': {
+                    'start': self.data['timestamp'].min().isoformat(),
+                    'end': self.data['timestamp'].max().isoformat(),
+                    'duration_days': (self.data['timestamp'].max() - self.data['timestamp'].min()).days
+                },
+                'countries': sorted(self.data['country'].unique().tolist()),
+                'cities': sorted(self.data['location'].unique().tolist()),
+                'unique_locations': self.data['location'].nunique()
+            },
+            
+            'temperature': {
+                'mean': float(self.data['temperature'].mean()),
+                'std': float(self.data['temperature'].std()),
+                'min': float(self.data['temperature'].min()),
+                'max': float(self.data['temperature'].max()),
+                'median': float(self.data['temperature'].median()),
+                'q25': float(self.data['temperature'].quantile(0.25)),
+                'q75': float(self.data['temperature'].quantile(0.75))
+            },
+            
+            'windspeed': {
+                'mean': float(self.data['windspeed'].mean()),
+                'std': float(self.data['windspeed'].std()),
+                'min': float(self.data['windspeed'].min()),
+                'max': float(self.data['windspeed'].max()),
+                'median': float(self.data['windspeed'].median()),
+                'q25': float(self.data['windspeed'].quantile(0.25)),
+                'q75': float(self.data['windspeed'].quantile(0.75))
+            },
+            
+            'alerts': {
+                'total_alerts': int(self.data['has_alert'].sum()),
+                'alert_percentage': float(self.data['has_alert'].mean() * 100),
+                'wind_alerts': {
+                    'level_0': int((self.data['wind_alert_level'] == 0).sum()),
+                    'level_1': int((self.data['wind_alert_level'] == 1).sum()),
+                    'level_2': int((self.data['wind_alert_level'] == 2).sum())
+                },
+                'heat_alerts': {
+                    'level_0': int((self.data['heat_alert_level'] == 0).sum()),
+                    'level_1': int((self.data['heat_alert_level'] == 1).sum()),
+                    'level_2': int((self.data['heat_alert_level'] == 2).sum())
+                }
+            },
+            
+            'geographical': {
+                'by_country': self.data.groupby('country').agg({
+                    'temperature': ['mean', 'std', 'count'],
+                    'windspeed': ['mean', 'std'],
+                    'has_alert': 'mean'
+                }).round(2).to_dict(),
+                
+                'most_active_cities': self.data['location'].value_counts().head(10).to_dict()
+            },
+            
+            'temporal': {
+                'by_hour': self.data.groupby('hour')['temperature'].mean().round(2).to_dict(),
+                'by_month': self.data.groupby('month')['temperature'].mean().round(2).to_dict(),
+                'daily_records': self.data.groupby('date').size().describe().to_dict()
+            }
         }
         
-        # Créer heatmap des codes météo par pays
-        weather_by_country = pd.crosstab(df['country_code'], df['weathercode'])
+        self.stats = stats
+        return stats
+
+# ==================================================================================
+# VISUALIZATION ENGINE
+# ==================================================================================
+
+class WeatherVisualizer:
+    """Engine de visualisation avancée pour analytics météorologiques"""
+    
+    def __init__(self, data_processor: WeatherDataProcessor, output_dir: str = "./visualizations"):
+        self.processor = data_processor
+        self.data = data_processor.data
+        self.stats = data_processor.stats
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(exist_ok=True)
+        self.logger = data_processor.logger
         
-        # Renommer les colonnes avec les descriptions
-        weather_by_country.columns = [
-            weather_code_mapping.get(code, f"Code {code}") 
-            for code in weather_by_country.columns
-        ]
+        # Configuration matplotlib
+        plt.style.use(VISUALIZATION_CONFIG['style'])
+        plt.rcParams['figure.figsize'] = VISUALIZATION_CONFIG['figure_size']
+        plt.rcParams['figure.dpi'] = VISUALIZATION_CONFIG['dpi']
+        plt.rcParams['font.size'] = VISUALIZATION_CONFIG['font_size']
         
-        sns.heatmap(weather_by_country, annot=True, fmt='d', cmap='YlOrRd', 
-                   cbar_kws={'label': 'Nombre d\'observations'})
+    def create_comprehensive_dashboard(self):
+        """Crée un dashboard complet avec toutes les visualisations"""
+        self.logger.info("🎨 Génération du dashboard complet")
         
-        plt.title('🌤️ Codes Météo par Pays', fontsize=16, fontweight='bold')
-        plt.xlabel('Code Météo', fontsize=12)
-        plt.ylabel('Code Pays', fontsize=12)
-        plt.xticks(rotation=45, ha='right')
-        
-        plt.tight_layout()
-        plt.savefig(output_path / "weather_codes_by_country.png", dpi=300, bbox_inches='tight')
-        plt.close()
-        
-        print("   ✅ weather_codes_by_country.png")
-        
-    def _plot_geographic_overview(self, df: pd.DataFrame, output_path: Path):
-        """Vue d'ensemble géographique"""
-        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
-        
-        # 1. Scatter plot latitude/longitude avec température
-        scatter = ax1.scatter(df['longitude'], df['latitude'], 
-                            c=df['temperature'], s=df['windspeed']*2, 
-                            cmap='coolwarm', alpha=0.7)
-        ax1.set_title('🗺️ Localisation avec Température/Vent', fontweight='bold')
-        ax1.set_xlabel('Longitude')
-        ax1.set_ylabel('Latitude')
-        plt.colorbar(scatter, ax=ax1, label='Température (°C)')
-        
-        # 2. Nombre de villes par pays
-        cities_by_country = df.groupby('country_code')['city_name'].nunique().sort_values(ascending=False)
-        cities_by_country.head(10).plot(kind='bar', ax=ax2, color='skyblue')
-        ax2.set_title('🏙️ Nombre de Villes par Pays', fontweight='bold')
-        ax2.set_ylabel('Nombre de Villes')
-        ax2.tick_params(axis='x', rotation=45)
-        
-        # 3. Température moyenne par pays
-        temp_by_country = df.groupby('country_code')['temperature'].mean().sort_values(ascending=False)
-        temp_by_country.head(10).plot(kind='bar', ax=ax3, color='coral')
-        ax3.set_title('🌡️ Température Moyenne par Pays', fontweight='bold')
-        ax3.set_ylabel('Température (°C)')
-        ax3.tick_params(axis='x', rotation=45)
-        
-        # 4. Distribution des directions du vent
-        wind_directions = df['winddirection'].value_counts().head(8)
-        wind_directions.plot(kind='bar', ax=ax4, color='lightgreen')
-        ax4.set_title('🧭 Distribution des Directions du Vent', fontweight='bold')
-        ax4.set_ylabel('Nombre d\'observations')
-        ax4.set_xlabel('Direction (degrés)')
-        ax4.tick_params(axis='x', rotation=45)
-        
-        plt.tight_layout()
-        plt.savefig(output_path / "geographic_overview.png", dpi=300, bbox_inches='tight')
-        plt.close()
-        
-        print("   ✅ geographic_overview.png")
-        
-    def _plot_temporal_analysis(self, df: pd.DataFrame, output_path: Path):
-        """Analyse temporelle des données"""
-        if df['processed_at'].isna().all():
-            print("   ⚠️ Pas de données temporelles pour l'analyse")
+        if self.data.empty:
+            self.logger.error("❌ Aucune donnée à visualiser")
             return
             
-        plt.figure(figsize=(14, 8))
+        # 1. Overview temporel
+        self._create_temporal_overview()
         
-        # Filtrer les données avec timestamps valides
-        df_time = df.dropna(subset=['processed_at'])
+        # 2. Analyses géographiques
+        self._create_geographical_analysis()
         
-        if len(df_time) == 0:
-            print("   ⚠️ Aucune donnée temporelle valide")
-            return
+        # 3. Analyse des alertes
+        self._create_alert_analysis()
+        
+        # 4. Corrélations et patterns
+        self._create_correlation_analysis()
+        
+        # 5. Dashboard interactif
+        self._create_interactive_dashboard()
+        
+        # 6. Export des données agrégées
+        self._export_aggregated_data()
+        
+        self.logger.info(f"✅ Dashboard complet généré dans: {self.output_dir}")
+    
+    def _create_temporal_overview(self):
+        """Crée les visualisations temporelles"""
+        self.logger.info("📈 Génération des analyses temporelles")
+        
+        fig = plt.figure(figsize=(20, 16))
+        gs = GridSpec(4, 2, figure=fig, hspace=0.3, wspace=0.3)
+        
+        # 1. Évolution température dans le temps
+        ax1 = fig.add_subplot(gs[0, :])
+        if not self.data.empty:
+            daily_temp = self.data.groupby('date')['temperature'].agg(['mean', 'min', 'max']).reset_index()
+            daily_temp['date'] = pd.to_datetime(daily_temp['date'])
             
-        # Température au fil du temps
-        df_time = df_time.sort_values('processed_at')
+            ax1.plot(daily_temp['date'], daily_temp['mean'], label='Température moyenne', color='red', linewidth=2)
+            ax1.fill_between(daily_temp['date'], daily_temp['min'], daily_temp['max'], 
+                           alpha=0.3, color='red', label='Min-Max range')
+            
+            ax1.set_title('🌡️ Évolution de la Température dans le Temps', fontsize=16, fontweight='bold')
+            ax1.set_xlabel('Date')
+            ax1.set_ylabel('Température (°C)')
+            ax1.legend()
+            ax1.grid(True, alpha=0.3)
+            ax1.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+            ax1.xaxis.set_major_locator(mdates.DayLocator(interval=max(1, len(daily_temp)//10)))
+            plt.setp(ax1.xaxis.get_majorticklabels(), rotation=45)
         
-        plt.subplot(2, 1, 1)
-        for country in df_time['country_code'].unique()[:5]:  # Top 5 pays
-            country_data = df_time[df_time['country_code'] == country]
-            plt.plot(country_data['processed_at'], country_data['temperature'], 
-                    marker='o', label=country, alpha=0.7)
-                    
-        plt.title('📈 Évolution Temporelle des Températures', fontsize=14, fontweight='bold')
-        plt.ylabel('Température (°C)')
-        plt.legend()
-        plt.grid(True, alpha=0.3)
+        # 2. Évolution vitesse du vent
+        ax2 = fig.add_subplot(gs[1, :])
+        if not self.data.empty:
+            daily_wind = self.data.groupby('date')['windspeed'].agg(['mean', 'min', 'max']).reset_index()
+            daily_wind['date'] = pd.to_datetime(daily_wind['date'])
+            
+            ax2.plot(daily_wind['date'], daily_wind['mean'], label='Vitesse moyenne', color='blue', linewidth=2)
+            ax2.fill_between(daily_wind['date'], daily_wind['min'], daily_wind['max'], 
+                           alpha=0.3, color='blue', label='Min-Max range')
+            
+            ax2.set_title('💨 Évolution de la Vitesse du Vent dans le Temps', fontsize=16, fontweight='bold')
+            ax2.set_xlabel('Date')
+            ax2.set_ylabel('Vitesse du vent (m/s)')
+            ax2.legend()
+            ax2.grid(True, alpha=0.3)
+            ax2.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+            ax2.xaxis.set_major_locator(mdates.DayLocator(interval=max(1, len(daily_wind)//10)))
+            plt.setp(ax2.xaxis.get_majorticklabels(), rotation=45)
         
-        # Vitesse du vent au fil du temps
-        plt.subplot(2, 1, 2)
-        for country in df_time['country_code'].unique()[:5]:
-            country_data = df_time[df_time['country_code'] == country]
-            plt.plot(country_data['processed_at'], country_data['windspeed'], 
-                    marker='s', label=country, alpha=0.7)
-                    
-        plt.title('💨 Évolution Temporelle du Vent', fontsize=14, fontweight='bold')
-        plt.ylabel('Vitesse du Vent (km/h)')
-        plt.xlabel('Temps de Traitement')
-        plt.legend()
-        plt.grid(True, alpha=0.3)
+        # 3. Distribution par heure
+        ax3 = fig.add_subplot(gs[2, 0])
+        if not self.data.empty:
+            hourly_temp = self.data.groupby('hour')['temperature'].mean()
+            ax3.bar(hourly_temp.index, hourly_temp.values, color='orange', alpha=0.7)
+            ax3.set_title('🕐 Température Moyenne par Heure', fontweight='bold')
+            ax3.set_xlabel('Heure')
+            ax3.set_ylabel('Température (°C)')
+            ax3.grid(True, alpha=0.3)
+        
+        # 4. Distribution par pays
+        ax4 = fig.add_subplot(gs[2, 1])
+        if not self.data.empty:
+            country_temp = self.data.groupby('country')['temperature'].mean().sort_values(ascending=False)
+            colors = [COUNTRY_COLORS.get(country, '#888888') for country in country_temp.index]
+            ax4.bar(country_temp.index, country_temp.values, color=colors, alpha=0.8)
+            ax4.set_title('🌍 Température Moyenne par Pays', fontweight='bold')
+            ax4.set_xlabel('Pays')
+            ax4.set_ylabel('Température (°C)')
+            ax4.grid(True, alpha=0.3)
+        
+        # 5. Heatmap correlation
+        ax5 = fig.add_subplot(gs[3, :])
+        if not self.data.empty:
+            numeric_cols = ['temperature', 'windspeed', 'wind_alert_level', 'heat_alert_level', 'total_alert_level']
+            correlation_matrix = self.data[numeric_cols].corr()
+            
+            im = ax5.imshow(correlation_matrix, cmap='RdYlBu_r', aspect='auto', vmin=-1, vmax=1)
+            ax5.set_xticks(range(len(numeric_cols)))
+            ax5.set_yticks(range(len(numeric_cols)))
+            ax5.set_xticklabels(numeric_cols, rotation=45, ha='right')
+            ax5.set_yticklabels(numeric_cols)
+            ax5.set_title('🔗 Matrice de Corrélation des Variables Météorologiques', fontweight='bold')
+            
+            # Annotations des valeurs
+            for i in range(len(numeric_cols)):
+                for j in range(len(numeric_cols)):
+                    text = ax5.text(j, i, f'{correlation_matrix.iloc[i, j]:.2f}',
+                                   ha="center", va="center", color="black", fontweight='bold')
+            
+            plt.colorbar(im, ax=ax5, fraction=0.046, pad=0.04)
         
         plt.tight_layout()
-        plt.savefig(output_path / "temporal_analysis.png", dpi=300, bbox_inches='tight')
+        plt.savefig(self.output_dir / "01_temporal_overview.png", dpi=300, bbox_inches='tight')
         plt.close()
+    
+    def _create_geographical_analysis(self):
+        """Crée les analyses géographiques"""
+        self.logger.info("🗺️ Génération des analyses géographiques")
         
-        print("   ✅ temporal_analysis.png")
+        fig, axes = plt.subplots(2, 2, figsize=(20, 16))
+        fig.suptitle('🌍 Analyse Géographique des Données Météorologiques', fontsize=20, fontweight='bold')
         
-    def _create_dashboard(self, df: pd.DataFrame, output_path: Path):
-        """Dashboard récapitulatif avec statistiques clés"""
-        fig = plt.figure(figsize=(20, 12))
+        if self.data.empty:
+            return
+            
+        # 1. Température moyenne par pays
+        ax1 = axes[0, 0]
+        country_stats = self.data.groupby('country').agg({
+            'temperature': 'mean',
+            'windspeed': 'mean',
+            'has_alert': 'mean'
+        }).round(2)
         
-        # Créer une grille de sous-graphiques
-        gs = fig.add_gridspec(3, 4, hspace=0.3, wspace=0.3)
+        colors = [COUNTRY_COLORS.get(country, '#888888') for country in country_stats.index]
+        bars = ax1.bar(country_stats.index, country_stats['temperature'], color=colors, alpha=0.8)
+        ax1.set_title('🌡️ Température Moyenne par Pays', fontweight='bold')
+        ax1.set_ylabel('Température (°C)')
+        ax1.grid(True, alpha=0.3)
         
-        # Statistiques générales (texte)
-        ax_stats = fig.add_subplot(gs[0, :2])
-        ax_stats.axis('off')
+        # Annotations
+        for bar, temp in zip(bars, country_stats['temperature']):
+            ax1.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.5, 
+                    f'{temp:.1f}°C', ha='center', va='bottom', fontweight='bold')
         
-        stats_text = f"""
-📊 STATISTIQUES GÉNÉRALES HDFS
-═══════════════════════════════════
-📄 Total enregistrements: {len(df):,}
-🌍 Pays analysés: {df['country_code'].nunique()}
-🏙️ Villes analysées: {df['city_name'].nunique()}
+        # 2. Vitesse du vent par pays
+        ax2 = axes[0, 1]
+        bars = ax2.bar(country_stats.index, country_stats['windspeed'], color=colors, alpha=0.8)
+        ax2.set_title('💨 Vitesse du Vent Moyenne par Pays', fontweight='bold')
+        ax2.set_ylabel('Vitesse (m/s)')
+        ax2.grid(True, alpha=0.3)
+        
+        for bar, wind in zip(bars, country_stats['windspeed']):
+            ax2.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.2, 
+                    f'{wind:.1f}m/s', ha='center', va='bottom', fontweight='bold')
+        
+        # 3. Pourcentage d'alertes par pays
+        ax3 = axes[1, 0]
+        alert_percentage = country_stats['has_alert'] * 100
+        bars = ax3.bar(country_stats.index, alert_percentage, color=colors, alpha=0.8)
+        ax3.set_title('⚠️ Pourcentage d\'Alertes par Pays', fontweight='bold')
+        ax3.set_ylabel('Pourcentage (%)')
+        ax3.grid(True, alpha=0.3)
+        
+        for bar, pct in zip(bars, alert_percentage):
+            ax3.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.5, 
+                    f'{pct:.1f}%', ha='center', va='bottom', fontweight='bold')
+        
+        # 4. Top 10 villes les plus actives
+        ax4 = axes[1, 1]
+        top_cities = self.data['location'].value_counts().head(10)
+        ax4.barh(range(len(top_cities)), top_cities.values, color='skyblue', alpha=0.8)
+        ax4.set_yticks(range(len(top_cities)))
+        ax4.set_yticklabels(top_cities.index)
+        ax4.set_title('🏙️ Top 10 Villes les Plus Actives', fontweight='bold')
+        ax4.set_xlabel('Nombre de mesures')
+        ax4.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.savefig(self.output_dir / "02_geographical_analysis.png", dpi=300, bbox_inches='tight')
+        plt.close()
+    
+    def _create_alert_analysis(self):
+        """Crée l'analyse des alertes"""
+        self.logger.info("🚨 Génération de l'analyse des alertes")
+        
+        fig, axes = plt.subplots(2, 3, figsize=(24, 16))
+        fig.suptitle('🚨 Analyse Complète des Alertes Météorologiques', fontsize=20, fontweight='bold')
+        
+        if self.data.empty:
+            return
+        
+        # 1. Distribution des alertes vent
+        ax1 = axes[0, 0]
+        wind_alert_counts = self.data['wind_alert_level'].value_counts().sort_index()
+        colors_wind = ['#2ECC71', '#F39C12', '#E74C3C']
+        bars = ax1.bar(wind_alert_counts.index, wind_alert_counts.values, 
+                      color=colors_wind[:len(wind_alert_counts)], alpha=0.8)
+        ax1.set_title('💨 Distribution des Alertes Vent', fontweight='bold')
+        ax1.set_xlabel('Niveau d\'alerte')
+        ax1.set_ylabel('Nombre de mesures')
+        ax1.grid(True, alpha=0.3)
+        
+        for bar, count in zip(bars, wind_alert_counts.values):
+            ax1.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 10, 
+                    f'{count:,}', ha='center', va='bottom', fontweight='bold')
+        
+        # 2. Distribution des alertes chaleur
+        ax2 = axes[0, 1]
+        heat_alert_counts = self.data['heat_alert_level'].value_counts().sort_index()
+        colors_heat = ['#3498DB', '#E67E22', '#C0392B']
+        bars = ax2.bar(heat_alert_counts.index, heat_alert_counts.values, 
+                      color=colors_heat[:len(heat_alert_counts)], alpha=0.8)
+        ax2.set_title('🌡️ Distribution des Alertes Chaleur', fontweight='bold')
+        ax2.set_xlabel('Niveau d\'alerte')
+        ax2.set_ylabel('Nombre de mesures')
+        ax2.grid(True, alpha=0.3)
+        
+        for bar, count in zip(bars, heat_alert_counts.values):
+            ax2.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 10, 
+                    f'{count:,}', ha='center', va='bottom', fontweight='bold')
+        
+        # 3. Évolution des alertes dans le temps
+        ax3 = axes[0, 2]
+        daily_alerts = self.data.groupby('date')['has_alert'].sum().reset_index()
+        daily_alerts['date'] = pd.to_datetime(daily_alerts['date'])
+        
+        ax3.plot(daily_alerts['date'], daily_alerts['has_alert'], 
+                color='red', linewidth=2, marker='o', markersize=4)
+        ax3.set_title('📈 Évolution des Alertes par Jour', fontweight='bold')
+        ax3.set_xlabel('Date')
+        ax3.set_ylabel('Nombre d\'alertes')
+        ax3.grid(True, alpha=0.3)
+        ax3.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d'))
+        plt.setp(ax3.xaxis.get_majorticklabels(), rotation=45)
+        
+        # 4. Alertes par pays
+        ax4 = axes[1, 0]
+        alert_by_country = self.data.groupby('country')['has_alert'].sum().sort_values(ascending=False)
+        colors = [COUNTRY_COLORS.get(country, '#888888') for country in alert_by_country.index]
+        bars = ax4.bar(alert_by_country.index, alert_by_country.values, color=colors, alpha=0.8)
+        ax4.set_title('🌍 Nombre d\'Alertes par Pays', fontweight='bold')
+        ax4.set_ylabel('Nombre d\'alertes')
+        ax4.grid(True, alpha=0.3)
+        
+        for bar, count in zip(bars, alert_by_country.values):
+            ax4.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 5, 
+                    f'{count:,}', ha='center', va='bottom', fontweight='bold')
+        
+        # 5. Heatmap alertes par heure et jour de la semaine
+        ax5 = axes[1, 1]
+        if not self.data.empty:
+            hourly_dow_alerts = self.data.groupby(['day_of_week', 'hour'])['has_alert'].sum().unstack(fill_value=0)
+            
+            # Réorganiser les jours de la semaine
+            day_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+            hourly_dow_alerts = hourly_dow_alerts.reindex(day_order)
+            
+            im = ax5.imshow(hourly_dow_alerts.values, aspect='auto', cmap='Reds')
+            ax5.set_xticks(range(24))
+            ax5.set_xticklabels(range(24))
+            ax5.set_yticks(range(len(day_order)))
+            ax5.set_yticklabels([day[:3] for day in day_order])
+            ax5.set_title('🕐 Heatmap Alertes par Heure et Jour', fontweight='bold')
+            ax5.set_xlabel('Heure')
+            ax5.set_ylabel('Jour de la semaine')
+            plt.colorbar(im, ax=ax5, fraction=0.046, pad=0.04)
+        
+        # 6. Corrélation température vs vitesse du vent avec alertes
+        ax6 = axes[1, 2]
+        if not self.data.empty:
+            # Scatter plot avec couleurs par niveau d'alerte
+            scatter_data = self.data.sample(min(1000, len(self.data)))  # Échantillonnage pour performance
+            colors = []
+            for _, row in scatter_data.iterrows():
+                if row['wind_alert_level'] >= 2 or row['heat_alert_level'] >= 2:
+                    colors.append('#E74C3C')  # Rouge pour alertes niveau 2
+                elif row['wind_alert_level'] >= 1 or row['heat_alert_level'] >= 1:
+                    colors.append('#F39C12')  # Orange pour alertes niveau 1
+                else:
+                    colors.append('#2ECC71')  # Vert pour pas d'alerte
+            
+            ax6.scatter(scatter_data['temperature'], scatter_data['windspeed'], 
+                       c=colors, alpha=0.6, s=20)
+            ax6.set_title('🌡️💨 Température vs Vitesse du Vent\n(Couleur = Niveau d\'alerte)', fontweight='bold')
+            ax6.set_xlabel('Température (°C)')
+            ax6.set_ylabel('Vitesse du vent (m/s)')
+            ax6.grid(True, alpha=0.3)
+            
+            # Légende
+            from matplotlib.lines import Line2D
+            legend_elements = [
+                Line2D([0], [0], marker='o', color='w', markerfacecolor='#2ECC71', markersize=8, label='Pas d\'alerte'),
+                Line2D([0], [0], marker='o', color='w', markerfacecolor='#F39C12', markersize=8, label='Alerte niveau 1'),
+                Line2D([0], [0], marker='o', color='w', markerfacecolor='#E74C3C', markersize=8, label='Alerte niveau 2')
+            ]
+            ax6.legend(handles=legend_elements, loc='upper right')
+        
+        plt.tight_layout()
+        plt.savefig(self.output_dir / "03_alert_analysis.png", dpi=300, bbox_inches='tight')
+        plt.close()
+    
+    def _create_correlation_analysis(self):
+        """Crée l'analyse des corrélations et patterns"""
+        self.logger.info("🔗 Génération de l'analyse des corrélations")
+        
+        fig, axes = plt.subplots(2, 2, figsize=(20, 16))
+        fig.suptitle('🔗 Analyse des Corrélations et Patterns Météorologiques', fontsize=20, fontweight='bold')
+        
+        if self.data.empty:
+            return
+        
+        # 1. Matrice de corrélation détaillée
+        ax1 = axes[0, 0]
+        numeric_cols = ['temperature', 'windspeed', 'wind_alert_level', 'heat_alert_level', 'hour']
+        correlation_matrix = self.data[numeric_cols].corr()
+        
+        im = ax1.imshow(correlation_matrix, cmap='RdYlBu_r', aspect='auto', vmin=-1, vmax=1)
+        ax1.set_xticks(range(len(numeric_cols)))
+        ax1.set_yticks(range(len(numeric_cols)))
+        ax1.set_xticklabels(['Température', 'Vitesse vent', 'Alerte vent', 'Alerte chaleur', 'Heure'], 
+                           rotation=45, ha='right')
+        ax1.set_yticklabels(['Température', 'Vitesse vent', 'Alerte vent', 'Alerte chaleur', 'Heure'])
+        ax1.set_title('🔗 Matrice de Corrélation Détaillée', fontweight='bold')
+        
+        # Annotations
+        for i in range(len(numeric_cols)):
+            for j in range(len(numeric_cols)):
+                text = ax1.text(j, i, f'{correlation_matrix.iloc[i, j]:.2f}',
+                               ha="center", va="center", color="black", fontweight='bold')
+        
+        plt.colorbar(im, ax=ax1, fraction=0.046, pad=0.04)
+        
+        # 2. Distribution température par niveau d'alerte vent
+        ax2 = axes[0, 1]
+        wind_levels = sorted(self.data['wind_alert_level'].unique())
+        temp_by_wind = [self.data[self.data['wind_alert_level'] == level]['temperature'].values 
+                       for level in wind_levels]
+        
+        bp = ax2.boxplot(temp_by_wind, labels=[f'Niveau {level}' for level in wind_levels], 
+                        patch_artist=True)
+        colors = ['#2ECC71', '#F39C12', '#E74C3C']
+        for patch, color in zip(bp['boxes'], colors[:len(bp['boxes'])]):
+            patch.set_facecolor(color)
+            patch.set_alpha(0.7)
+        
+        ax2.set_title('🌡️ Distribution de la Température\npar Niveau d\'Alerte Vent', fontweight='bold')
+        ax2.set_ylabel('Température (°C)')
+        ax2.grid(True, alpha=0.3)
+        
+        # 3. Patterns temporels - température moyenne par heure
+        ax3 = axes[1, 0]
+        hourly_patterns = self.data.groupby('hour').agg({
+            'temperature': 'mean',
+            'windspeed': 'mean',
+            'has_alert': 'mean'
+        })
+        
+        ax3_twin = ax3.twinx()
+        
+        line1 = ax3.plot(hourly_patterns.index, hourly_patterns['temperature'], 
+                        'r-', linewidth=2, label='Température', marker='o')
+        line2 = ax3_twin.plot(hourly_patterns.index, hourly_patterns['windspeed'], 
+                             'b-', linewidth=2, label='Vitesse vent', marker='s')
+        
+        ax3.set_xlabel('Heure')
+        ax3.set_ylabel('Température (°C)', color='red')
+        ax3_twin.set_ylabel('Vitesse du vent (m/s)', color='blue')
+        ax3.set_title('🕐 Patterns Horaires - Température et Vent', fontweight='bold')
+        ax3.grid(True, alpha=0.3)
+        
+        # Légende combinée
+        lines = line1 + line2
+        labels = [l.get_label() for l in lines]
+        ax3.legend(lines, labels, loc='upper left')
+        
+        # 4. Clustering analysis
+        ax4 = axes[1, 1]
+        if len(self.data) > 100:  # Clustering seulement si suffisamment de données
+            # Préparation des données pour clustering
+            cluster_data = self.data[['temperature', 'windspeed']].dropna()
+            if len(cluster_data) > 100:
+                # Échantillonnage pour performance
+                cluster_sample = cluster_data.sample(min(1000, len(cluster_data)))
+                
+                # Normalisation
+                scaler = StandardScaler()
+                scaled_data = scaler.fit_transform(cluster_sample)
+                
+                # K-means clustering
+                kmeans = KMeans(n_clusters=3, random_state=42, n_init=10)
+                cluster_labels = kmeans.fit_predict(scaled_data)
+                
+                # Visualisation
+                colors = ['#FF6B6B', '#4ECDC4', '#45B7D1']
+                for i in range(3):
+                    mask = cluster_labels == i
+                    ax4.scatter(cluster_sample.iloc[mask]['temperature'], 
+                               cluster_sample.iloc[mask]['windspeed'],
+                               c=colors[i], alpha=0.6, s=20, label=f'Cluster {i+1}')
+                
+                # Centres des clusters
+                centers = scaler.inverse_transform(kmeans.cluster_centers_)
+                ax4.scatter(centers[:, 0], centers[:, 1], c='black', marker='x', s=200, linewidths=3)
+                
+                ax4.set_title('🎯 Clustering K-means\n(Température vs Vitesse du vent)', fontweight='bold')
+                ax4.set_xlabel('Température (°C)')
+                ax4.set_ylabel('Vitesse du vent (m/s)')
+                ax4.legend()
+                ax4.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.savefig(self.output_dir / "04_correlation_analysis.png", dpi=300, bbox_inches='tight')
+        plt.close()
+    
+    def _create_interactive_dashboard(self):
+        """Crée un dashboard interactif avec Plotly"""
+        self.logger.info("🎛️ Génération du dashboard interactif")
+        
+        if self.data.empty:
+            return
+        
+        # Création du dashboard avec subplots
+        fig = make_subplots(
+            rows=3, cols=2,
+            subplot_titles=(
+                '🌡️ Évolution de la Température',
+                '💨 Évolution de la Vitesse du Vent',
+                '🚨 Distribution des Alertes',
+                '🌍 Analyse Géographique',
+                '🕐 Patterns Horaires',
+                '🔗 Corrélation Temp vs Vent'
+            ),
+            specs=[[{"secondary_y": False}, {"secondary_y": False}],
+                   [{"secondary_y": False}, {"secondary_y": False}],
+                   [{"secondary_y": True}, {"secondary_y": False}]]
+        )
+        
+        # 1. Évolution température
+        daily_temp = self.data.groupby('date')['temperature'].agg(['mean', 'min', 'max']).reset_index()
+        fig.add_trace(
+            go.Scatter(x=daily_temp['date'], y=daily_temp['mean'], 
+                      mode='lines+markers', name='Temp moyenne',
+                      line=dict(color='red', width=2)),
+            row=1, col=1
+        )
+        
+        # 2. Évolution vitesse du vent
+        daily_wind = self.data.groupby('date')['windspeed'].agg(['mean', 'min', 'max']).reset_index()
+        fig.add_trace(
+            go.Scatter(x=daily_wind['date'], y=daily_wind['mean'], 
+                      mode='lines+markers', name='Vent moyen',
+                      line=dict(color='blue', width=2)),
+            row=1, col=2
+        )
+        
+        # 3. Distribution des alertes
+        alert_counts = pd.concat([
+            self.data['wind_alert_level'].value_counts().rename('Wind'),
+            self.data['heat_alert_level'].value_counts().rename('Heat')
+        ], axis=1).fillna(0)
+        
+        fig.add_trace(
+            go.Bar(x=alert_counts.index, y=alert_counts['Wind'], 
+                  name='Alertes Vent', marker_color='lightblue'),
+            row=2, col=1
+        )
+        fig.add_trace(
+            go.Bar(x=alert_counts.index, y=alert_counts['Heat'], 
+                  name='Alertes Chaleur', marker_color='orange'),
+            row=2, col=1
+        )
+        
+        # 4. Analyse géographique
+        country_stats = self.data.groupby('country')['temperature'].mean().sort_values(ascending=False)
+        fig.add_trace(
+            go.Bar(x=country_stats.index, y=country_stats.values, 
+                  name='Temp par pays', marker_color='green'),
+            row=2, col=2
+        )
+        
+        # 5. Patterns horaires
+        hourly_temp = self.data.groupby('hour')['temperature'].mean()
+        hourly_wind = self.data.groupby('hour')['windspeed'].mean()
+        
+        fig.add_trace(
+            go.Scatter(x=hourly_temp.index, y=hourly_temp.values, 
+                      mode='lines+markers', name='Temp horaire',
+                      line=dict(color='red')),
+            row=3, col=1
+        )
+        fig.add_trace(
+            go.Scatter(x=hourly_wind.index, y=hourly_wind.values, 
+                      mode='lines+markers', name='Vent horaire',
+                      line=dict(color='blue'), yaxis='y2'),
+            row=3, col=1, secondary_y=True
+        )
+        
+        # 6. Scatter plot température vs vent
+        sample_data = self.data.sample(min(500, len(self.data)))
+        fig.add_trace(
+            go.Scatter(x=sample_data['temperature'], y=sample_data['windspeed'],
+                      mode='markers', name='Temp vs Vent',
+                      marker=dict(color=sample_data['total_alert_level'], 
+                                colorscale='Reds', showscale=True)),
+            row=3, col=2
+        )
+        
+        # Configuration du layout
+        fig.update_layout(
+            title_text="🌊📊 Dashboard Interactif - Analyse Météorologique Complète",
+            title_x=0.5,
+            title_font_size=20,
+            height=1200,
+            showlegend=True
+        )
+        
+        # Sauvegarde du dashboard interactif
+        output_html = self.output_dir / "05_interactive_dashboard.html"
+        pyo.plot(fig, filename=str(output_html), auto_open=False)
+        
+        self.logger.info(f"✅ Dashboard interactif sauvegardé: {output_html}")
+    
+    def _export_aggregated_data(self):
+        """Exporte les données agrégées dans différents formats"""
+        self.logger.info("📊 Export des données agrégées")
+        
+        if self.data.empty:
+            return
+        
+        exports_dir = self.output_dir / "exports"
+        exports_dir.mkdir(exist_ok=True)
+        
+        # 1. Données journalières agrégées
+        daily_agg = self.data.groupby(['date', 'country']).agg({
+            'temperature': ['mean', 'min', 'max', 'std'],
+            'windspeed': ['mean', 'min', 'max', 'std'],
+            'wind_alert_level': ['mean', 'max'],
+            'heat_alert_level': ['mean', 'max'],
+            'has_alert': ['sum', 'mean'],
+            'location': 'count'
+        }).round(2)
+        
+        daily_agg.columns = ['_'.join(col).strip() for col in daily_agg.columns.values]
+        daily_agg.reset_index().to_csv(exports_dir / "daily_aggregated_data.csv", index=False)
+        
+        # 2. Statistiques par pays
+        country_stats = self.data.groupby('country').agg({
+            'temperature': ['count', 'mean', 'std', 'min', 'max'],
+            'windspeed': ['mean', 'std', 'min', 'max'],
+            'wind_alert_level': lambda x: (x > 0).sum(),
+            'heat_alert_level': lambda x: (x > 0).sum(),
+            'has_alert': ['sum', 'mean'],
+            'location': 'nunique'
+        }).round(2)
+        
+        country_stats.columns = ['_'.join(col).strip() for col in country_stats.columns.values]
+        country_stats.to_csv(exports_dir / "country_statistics.csv")
+        
+        # 3. Top villes avec le plus d'alertes
+        city_alerts = self.data.groupby('location').agg({
+            'has_alert': 'sum',
+            'temperature': 'mean',
+            'windspeed': 'mean',
+            'wind_alert_level': 'max',
+            'heat_alert_level': 'max'
+        }).sort_values('has_alert', ascending=False).head(20)
+        
+        city_alerts.to_csv(exports_dir / "top_alert_cities.csv")
+        
+        # 4. Patterns temporels
+        temporal_patterns = self.data.groupby(['hour', 'day_of_week']).agg({
+            'temperature': 'mean',
+            'windspeed': 'mean',
+            'has_alert': 'mean'
+        }).round(2)
+        
+        temporal_patterns.to_csv(exports_dir / "temporal_patterns.csv")
+        
+        # 5. Export des statistiques complètes en JSON
+        with open(exports_dir / "complete_statistics.json", 'w', encoding='utf-8') as f:
+            json.dump(self.stats, f, indent=2, ensure_ascii=False, default=str)
+        
+        self.logger.info(f"✅ Données exportées dans: {exports_dir}")
 
-🌡️ TEMPÉRATURE
-• Moyenne: {df['temperature'].mean():.1f}°C
-• Min: {df['temperature'].min():.1f}°C  
-• Max: {df['temperature'].max():.1f}°C
+# ==================================================================================
+# CLI INTERFACE
+# ==================================================================================
 
-💨 VENT  
-• Vitesse moyenne: {df['windspeed'].mean():.1f} km/h
-• Vitesse max: {df['windspeed'].max():.1f} km/h
-
-🚨 ALERTES
-• Critiques: {len(df[df['alert_level'] == 'CRITIQUE'])}
-• Élevées: {len(df[df['alert_level'] == 'ÉLEVÉE'])}
-• Modérées: {len(df[df['alert_level'] == 'MODÉRÉE'])}
-• Normales: {len(df[df['alert_level'] == 'NORMALE'])}
+def create_argparser() -> argparse.ArgumentParser:
+    """Crée le parser d'arguments CLI"""
+    parser = argparse.ArgumentParser(
+        description="🌊📊 Kafka Weather Analytics - Exercice 8: Advanced BI Visualizations",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Exemples d'utilisation:
+  python weather_visualizer.py --input "./hdfs-data"
+  python weather_visualizer.py --input "./hdfs-data" --dashboard
+  python weather_visualizer.py --input "./hdfs-data" --export-data
+  python weather_visualizer.py --input "./hdfs-data" --output "./custom_reports"
         """
-        
-        ax_stats.text(0.05, 0.95, stats_text, transform=ax_stats.transAxes, 
-                     fontsize=12, verticalalignment='top', fontfamily='monospace',
-                     bbox=dict(boxstyle="round,pad=1", facecolor="lightblue", alpha=0.7))
-        
-        # Top 5 pays par température
-        ax1 = fig.add_subplot(gs[0, 2])
-        top_temp = df.groupby('country_code')['temperature'].mean().sort_values(ascending=False).head(5)
-        top_temp.plot(kind='bar', ax=ax1, color='red', alpha=0.7)
-        ax1.set_title('🌡️ Top 5 Pays - Température', fontweight='bold')
-        ax1.tick_params(axis='x', rotation=45)
-        
-        # Top 5 pays par vent
-        ax2 = fig.add_subplot(gs[0, 3])
-        top_wind = df.groupby('country_code')['windspeed'].mean().sort_values(ascending=False).head(5)
-        top_wind.plot(kind='bar', ax=ax2, color='blue', alpha=0.7)
-        ax2.set_title('💨 Top 5 Pays - Vent', fontweight='bold')
-        ax2.tick_params(axis='x', rotation=45)
-        
-        # Distribution alertes (pie)
-        ax3 = fig.add_subplot(gs[1, 0])
-        alert_counts = df['alert_level'].value_counts()
-        colors = ['green', 'yellow', 'orange', 'red'][:len(alert_counts)]
-        ax3.pie(alert_counts.values, labels=alert_counts.index, autopct='%1.1f%%',
-               colors=colors, startangle=90)
-        ax3.set_title('🚨 Distribution Alertes', fontweight='bold')
-        
-        # Codes météo les plus fréquents
-        ax4 = fig.add_subplot(gs[1, 1])
-        top_weather = df['weathercode'].value_counts().head(5)
-        top_weather.plot(kind='bar', ax=ax4, color='orange', alpha=0.7)
-        ax4.set_title('🌤️ Top 5 Codes Météo', fontweight='bold')
-        ax4.tick_params(axis='x', rotation=45)
-        
-        # Heatmap température vs vent par pays
-        ax5 = fig.add_subplot(gs[1, 2:])
-        temp_wind_by_country = df.groupby('country_code')[['temperature', 'windspeed']].mean()
-        sns.scatterplot(data=temp_wind_by_country, x='temperature', y='windspeed', 
-                       s=100, alpha=0.7, ax=ax5)
-        
-        # Annoter les points avec les codes pays
-        for idx, row in temp_wind_by_country.iterrows():
-            ax5.annotate(idx, (row['temperature'], row['windspeed']), 
-                        xytext=(5, 5), textcoords='offset points', fontsize=8)
-                        
-        ax5.set_title('🌡️💨 Température vs Vent par Pays', fontweight='bold')
-        ax5.set_xlabel('Température Moyenne (°C)')
-        ax5.set_ylabel('Vitesse Vent Moyenne (km/h)')
-        
-        # Historique par pays (ligne du temps simplifiée)
-        ax6 = fig.add_subplot(gs[2, :])
-        
-        # Simulation d'une timeline avec index
-        df_sample = df.head(50)  # Échantillon pour la lisibilité
-        
-        for i, country in enumerate(df_sample['country_code'].unique()[:5]):
-            country_data = df_sample[df_sample['country_code'] == country]
-            indices = country_data.index
-            temperatures = country_data['temperature']
-            
-            ax6.plot(indices, temperatures, marker='o', label=country, alpha=0.7)
-            
-        ax6.set_title('📈 Échantillon Évolution Températures par Index', fontweight='bold')
-        ax6.set_xlabel('Index d\'enregistrement')
-        ax6.set_ylabel('Température (°C)')
-        ax6.legend()
-        ax6.grid(True, alpha=0.3)
-        
-        plt.suptitle('🌍 DASHBOARD MÉTÉO HDFS - VUE D\'ENSEMBLE COMPLÈTE', 
-                    fontsize=20, fontweight='bold', y=0.98)
-        
-        plt.savefig(output_path / "dashboard_overview.png", dpi=300, bbox_inches='tight')
-        plt.close()
-        
-        print("   ✅ dashboard_overview.png")
-        
-    def generate_report(self, output_dir: str = "./visualizations"):
-        """Génère un rapport HTML avec toutes les visualisations"""
-        output_path = Path(output_dir)
-        
-        if not self.data:
-            print("❌ Aucune donnée pour le rapport")
-            return
-            
-        df = self.create_dataframe()
-        
-        # Template HTML
-        html_content = f"""
-<!DOCTYPE html>
-<html lang="fr">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🌍 Rapport Analyse Météo HDFS</title>
-    <style>
-        body {{
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            line-height: 1.6;
-            margin: 0;
-            padding: 20px;
-            background-color: #f5f5f5;
-        }}
-        .container {{
-            max-width: 1200px;
-            margin: 0 auto;
-            background: white;
-            padding: 30px;
-            border-radius: 10px;
-            box-shadow: 0 0 20px rgba(0,0,0,0.1);
-        }}
-        h1, h2 {{
-            color: #2c3e50;
-            border-bottom: 3px solid #3498db;
-            padding-bottom: 10px;
-        }}
-        .stats-grid {{
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 20px;
-            margin: 20px 0;
-        }}
-        .stat-card {{
-            background: #ecf0f1;
-            padding: 20px;
-            border-radius: 8px;
-            text-align: center;
-            border-left: 5px solid #3498db;
-        }}
-        .stat-number {{
-            font-size: 2em;
-            font-weight: bold;
-            color: #2980b9;
-        }}
-        .chart {{
-            text-align: center;
-            margin: 30px 0;
-        }}
-        .chart img {{
-            max-width: 100%;
-            height: auto;
-            border-radius: 8px;
-            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-        }}
-        .footer {{
-            text-align: center;
-            margin-top: 50px;
-            padding: 20px;
-            background: #34495e;
-            color: white;
-            border-radius: 8px;
-        }}
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>🌍 Rapport d'Analyse Météo HDFS</h1>
-        <p><strong>Généré le:</strong> {datetime.now().strftime('%d/%m/%Y à %H:%M:%S')}</p>
-        
-        <h2>📊 Statistiques Générales</h2>
-        <div class="stats-grid">
-            <div class="stat-card">
-                <div class="stat-number">{len(df):,}</div>
-                <div>Enregistrements Totaux</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-number">{df['country_code'].nunique()}</div>
-                <div>Pays Analysés</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-number">{df['city_name'].nunique()}</div>
-                <div>Villes Analysées</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-number">{df['temperature'].mean():.1f}°C</div>
-                <div>Température Moyenne</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-number">{df['windspeed'].mean():.1f}</div>
-                <div>Vent Moyen (km/h)</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-number">{len(df[df['alert_level'] != 'NORMALE'])}</div>
-                <div>Alertes Météo</div>
-            </div>
-        </div>
-        
-        <h2>📈 Dashboard Complet</h2>
-        <div class="chart">
-            <img src="dashboard_overview.png" alt="Dashboard Complet">
-        </div>
-        
-        <h2>🌡️ Analyse des Températures</h2>
-        <div class="chart">
-            <img src="temperature_by_country.png" alt="Températures par Pays">
-        </div>
-        
-        <h2>💨 Analyse du Vent</h2>
-        <div class="chart">
-            <img src="wind_by_country.png" alt="Vent par Pays">
-        </div>
-        
-        <h2>🚨 Distribution des Alertes</h2>
-        <div class="chart">
-            <img src="alert_distribution.png" alt="Distribution des Alertes">
-        </div>
-        
-        <h2>🌤️ Codes Météo par Pays</h2>
-        <div class="chart">
-            <img src="weather_codes_by_country.png" alt="Codes Météo">
-        </div>
-        
-        <h2>🗺️ Vue Géographique</h2>
-        <div class="chart">
-            <img src="geographic_overview.png" alt="Vue Géographique">
-        </div>
-        
-        <h2>📈 Analyse Temporelle</h2>
-        <div class="chart">
-            <img src="temporal_analysis.png" alt="Analyse Temporelle">
-        </div>
-        
-        <div class="footer">
-            <p>🌍 Rapport généré par l'Exercice 8 - Visualisations HDFS</p>
-            <p>Données source: Structure HDFS {self.hdfs_path}</p>
-        </div>
-    </div>
-</body>
-</html>
-        """
-        
-        report_path = output_path / "rapport_meteo_hdfs.html"
-        with open(report_path, 'w', encoding='utf-8') as f:
-            f.write(html_content)
-            
-        print(f"✅ Rapport HTML généré: {report_path}")
-        return report_path
-
+    )
+    
+    parser.add_argument(
+        '--input', '-i',
+        type=str,
+        default="./hdfs-data",
+        help="Chemin vers les données HDFS (défaut: ./hdfs-data)"
+    )
+    
+    parser.add_argument(
+        '--output', '-o',
+        type=str,
+        default="./visualizations",
+        help="Dossier de sortie pour les visualisations (défaut: ./visualizations)"
+    )
+    
+    parser.add_argument(
+        '--dashboard',
+        action='store_true',
+        help="Génère seulement le dashboard interactif"
+    )
+    
+    parser.add_argument(
+        '--export-data',
+        action='store_true',
+        help="Exporte seulement les données agrégées"
+    )
+    
+    parser.add_argument(
+        '--type',
+        choices=['temperature', 'wind', 'alerts', 'geographical', 'temporal', 'all'],
+        default='all',
+        help="Type de visualisation à générer (défaut: all)"
+    )
+    
+    parser.add_argument(
+        '--country',
+        type=str,
+        help="Filtrer par pays spécifique (ex: FR, DE, US)"
+    )
+    
+    parser.add_argument(
+        '--format',
+        choices=['png', 'html', 'both'],
+        default='both',
+        help="Format de sortie (défaut: both)"
+    )
+    
+    parser.add_argument(
+        '--verbose', '-v',
+        action='store_true',
+        help="Mode verbeux"
+    )
+    
+    return parser
 
 def main():
     """Point d'entrée principal"""
-    parser = argparse.ArgumentParser(
-        description="Visualisations des données météo HDFS"
-    )
-    
-    parser.add_argument('--hdfs-path', 
-                        default='./hdfs-data',
-                        help='Chemin vers la structure HDFS (défaut: ./hdfs-data)')
-    
-    parser.add_argument('--output-dir', 
-                        default='./visualizations',
-                        help='Répertoire de sortie pour les visualisations (défaut: ./visualizations)')
-    
-    parser.add_argument('--report', 
-                        action='store_true',
-                        help='Générer aussi un rapport HTML')
-    
+    parser = create_argparser()
     args = parser.parse_args()
     
+    # Configuration du logging
+    log_level = logging.DEBUG if args.verbose else logging.INFO
+    logging.getLogger().setLevel(log_level)
+    
     try:
-        # Créer l'analyseur
-        analyzer = HDFSWeatherAnalyzer(args.hdfs_path)
+        # Initialisation du processeur de données
+        print("🌊📊 Kafka Weather Analytics - Exercice 8: Advanced BI Visualizations")
+        print("=" * 80)
         
-        # Charger les données
-        if not analyzer.load_hdfs_data():
-            print("❌ Aucune donnée trouvée dans la structure HDFS")
-            return
-            
-        # Générer les visualisations
-        analyzer.generate_visualizations(args.output_dir)
+        processor = WeatherDataProcessor(args.input)
         
-        # Générer le rapport HTML si demandé
-        if args.report:
-            analyzer.generate_report(args.output_dir)
-            
-        print(f"\n🎉 Analyse terminée avec succès!")
-        print(f"📁 Visualisations disponibles dans: {args.output_dir}")
+        # Chargement des données
+        data = processor.load_hdfs_data()
+        if data.empty:
+            print("❌ Aucune donnée trouvée. Vérifiez le chemin HDFS.")
+            return 1
+        
+        # Calcul des statistiques
+        stats = processor.compute_statistics()
+        
+        # Filtrage par pays si spécifié
+        if args.country:
+            data = data[data['country'] == args.country.upper()]
+            processor.data = data
+            print(f"🔍 Filtrage par pays: {args.country.upper()} ({len(data)} records)")
+        
+        # Initialisation du visualiseur
+        visualizer = WeatherVisualizer(processor, args.output)
+        
+        # Génération des visualisations selon les options
+        if args.dashboard:
+            visualizer._create_interactive_dashboard()
+        elif args.export_data:
+            visualizer._export_aggregated_data()
+        elif args.type == 'temperature':
+            visualizer._create_temporal_overview()
+        elif args.type == 'alerts':
+            visualizer._create_alert_analysis()
+        elif args.type == 'geographical':
+            visualizer._create_geographical_analysis()
+        elif args.type == 'temporal':
+            visualizer._create_correlation_analysis()
+        else:
+            # Génération complète
+            visualizer.create_comprehensive_dashboard()
+        
+        # Affichage des statistiques clés
+        print("\n📊 Statistiques Clés:")
+        print(f"   • Total records: {stats['general']['total_records']:,}")
+        print(f"   • Période: {stats['general']['date_range']['duration_days']} jours")
+        print(f"   • Pays: {len(stats['general']['countries'])}")
+        print(f"   • Villes: {stats['general']['unique_locations']}")
+        print(f"   • Alertes: {stats['alerts']['total_alerts']:,} ({stats['alerts']['alert_percentage']:.1f}%)")
+        print(f"   • Température moyenne: {stats['temperature']['mean']:.1f}°C")
+        print(f"   • Vitesse vent moyenne: {stats['windspeed']['mean']:.1f} m/s")
+        
+        print(f"\n✅ Visualisations générées dans: {args.output}")
+        print("🎊 Exercice 8 terminé avec succès!")
+        
+        return 0
         
     except Exception as e:
-        print(f"❌ Erreur durant l'analyse: {e}")
-        import traceback
-        traceback.print_exc()
-
+        print(f"❌ Erreur: {e}")
+        if args.verbose:
+            import traceback
+            traceback.print_exc()
+        return 1
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
