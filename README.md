@@ -1,30 +1,28 @@
-# Exercise 8: BI Visualizations & Analytics
+# Exercise 1: Kafka & ZooKeeper Setup
 
 ## Objective
-Create data visualizations and business intelligence dashboards.
+Set up a Kafka cluster with ZooKeeper using Docker for local development.
 
-## Planned Features
-- Temperature evolution charts
-- Alert distribution analysis
-- Geographic heat maps
-- Real-time dashboards
-- Historical trend analysis
+## Files
+- `docker-compose.yml` - Docker services configuration
+- `requirements.txt` - Python dependencies
 
-## Technology Stack
-- Matplotlib/Plotly for charts
-- Streamlit for web dashboard
-- Pandas for data analysis
-
-## Usage
+## Quick Start
 ```bash
-# Start visualization dashboard
-python weather_dashboard.py
+# Start services
+docker-compose up -d
 
-# Generate analysis reports
-python weather_analytics.py
+# Check services
+docker ps
+
+# View logs
+docker-compose logs kafka-broker
+docker-compose logs kafka-zookeeper
 ```
 
-## Data Sources
-- HDFS stored alerts
-- Real-time Kafka streams
-- Aggregated metrics
+## Services
+- **Kafka Broker**: localhost:9092
+- **ZooKeeper**: localhost:2181
+
+## Next Steps
+Continue with Exercise 2: Basic Producer/Consumer

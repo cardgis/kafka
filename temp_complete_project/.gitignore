@@ -1,0 +1,205 @@
+# ==================== KAFKA ====================
+# Logs et données Kafka
+/kafka_2.13-*/logs/
+/kafka_2.13-*/data/
+C:/tmp/kraft-combined-logs/
+*.log
+kraft-combined-logs/
+kafka_2.13-3.9.1/zookeeper-data/
+kafka_2.13-3.9.1/kafka-logs/
+*.tmp
+*.pid
+
+# Configuration temporaire
+server.properties.backup
+zookeeper.properties.backup
+
+# ==================== PYTHON ====================
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Unit test / coverage reports
+htmlcov/
+.coverage
+.pytest_cache/
+nosetests.xml
+coverage.xml
+
+# ==================== HDFS/DATA ====================
+# Données temporaires
+hdfs-data/
+data/
+temp-data/
+test-data/
+output/
+
+# Fichiers de données volumineux
+*.parquet
+*.avro
+*.orc
+
+# ==================== VISUALIZATIONS ====================
+# Graphiques générés
+visualizations/
+charts/
+plots/
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+*.pdf
+
+# Rapports HTML générés
+*.html
+reports/
+dashboard/
+
+# ==================== DÉVELOPPEMENT ====================
+# Fichiers temporaires de développement
+*temp*
+*test*
+*draft*
+$null
+*.draft
+*.temp
+
+# Scripts de setup redondants
+*setup-remote*
+*prepare-*
+*indexation*
+*git-indexation*
+
+# ==================== IDE & EDITEURS ====================
+# VSCode
+.vscode/
+!.vscode/settings.json.example
+
+# IntelliJ IDEA
+.idea/
+*.iws
+*.iml
+*.ipr
+
+# Autres éditeurs
+*.swp
+*.swo
+*~
+
+# ==================== SYSTÈME ====================
+# Windows
+Thumbs.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+
+# ==================== JAVA ====================
+*.class
+*.jar
+!kafka_2.13-3.9.1/libs/*.jar
+hs_err_pid*
+
+# ==================== LOGS ====================
+# Logs application
+*.log.*
+logs/
+log/
+application.log
+error.log
+debug.log
+
+# ==================== CACHE ====================
+# Cache général
+cache/
+.cache/
+tmp/
+temp/
+
+# ==================== BACKUP ====================
+# Sauvegardes
+*.bak
+*.backup
+*.old
+*.orig
+
+# ==================== SPÉCIFIQUE PROJET ====================
+# Spécifique au projet Kafka Weather Analytics
+weather-data/
+geo-data/
+analytics-output/
+processed-data/
+enriched-data/
+
+# Fichiers de test générés
+test-output/
+test-results/
+test-reports/
+
+# Configuration API keys (JAMAIS committer)
+api-keys.json
+open-meteo-config.json
+geocoding-keys.json
+
+# Données de debug
+debug-output/
+debug-logs/
+trace-files/
+
+# Métriques et monitoring
+metrics/
+monitoring-data/
+performance-logs/
+
+# Données temporaires et tests
+/tmp/
+*.csv
+*.json.bak
