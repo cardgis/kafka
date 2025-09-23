@@ -24,5 +24,17 @@ docker-compose logs kafka-zookeeper
 - **Kafka Broker**: localhost:9092
 - **ZooKeeper**: localhost:2181
 
+## Test
+```bash
+# Create topic
+docker exec kafka-broker kafka-topics --create --topic test --bootstrap-server localhost:9092
+
+# Send message
+echo "Hello Kafka" | docker exec -i kafka-broker kafka-console-producer --bootstrap-server localhost:9092 --topic test
+
+# Read messages
+docker exec kafka-broker kafka-console-consumer --bootstrap-server localhost:9092 --topic test --from-beginning
+```
+
 ## Next Steps
 Continue with Exercise 2: Basic Producer/Consumer
