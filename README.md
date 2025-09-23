@@ -1,19 +1,29 @@
-# Exercise 6: Geographic Weather Streaming
+# Exercise 7: HDFS Consumer & Storage
 
 ## Objective
-Enhance producers with geocoding to accept city/country input.
+Store weather alerts in organized HDFS structure.
 
 ## Files
-- `extended_weather_producer.py` - City/country weather producer
-- Geocoding integration with Open-Meteo API
+- `hdfs_consumer.py` - HDFS storage consumer
+- `hdfs_analyzer.py` - Storage analytics
+- `hdfs_health_check.py` - System diagnostics
+
+## Storage Structure
+```
+hdfs-data/
+├── {country}/
+│   └── {city}/
+│       └── alerts_*.json
+```
 
 ## Usage
 ```bash
-# Generate weather for cities
-python extended_weather_producer.py Paris France
-python extended_weather_producer.py "New York" "United States"
-python extended_weather_producer.py Tokyo Japan
-```
+# Start HDFS consumer
+python hdfs_consumer.py
 
-## Enhanced Data Format
-Messages now include complete location metadata for HDFS partitioning.
+# Check storage health
+python hdfs_health_check.py
+
+# Analyze stored data
+python hdfs_analyzer.py
+```
