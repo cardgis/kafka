@@ -1,17 +1,17 @@
-# Exercise 2: Basic Producer/Consumer
+# Exercise 3: Weather Data Streaming
 
 ## Objective
-Create basic Kafka producer and consumer scripts in Python.
+Stream real weather data from Open-Meteo API to Kafka.
 
 ## Files
-- `consumer.py` - Generic Kafka consumer
-- `simple_producer.py` - Basic message producer
+- `current_weather.py` - Weather data producer
+- `consumer.py` - Message consumer
 
 ## Usage
 ```bash
-# Start consumer
-python consumer.py weather_stream
+# Stream weather data
+python current_weather.py 48.8566 2.3522  # Paris coordinates
 
-# Send test message
-python simple_producer.py
+# Consume weather stream
+python consumer.py weather_stream
 ```
