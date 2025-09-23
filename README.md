@@ -1,23 +1,19 @@
-# Exercise 5: Real-time Aggregates
+# Exercise 6: Geographic Weather Streaming
 
 ## Objective
-Implement sliding window aggregation for weather metrics.
+Enhance producers with geocoding to accept city/country input.
 
 ## Files
-- `weather_aggregator.py` - Sliding window processor
-- `weather_transformer_simple.py` - Alert generator
-
-## Metrics Calculated
-- Temperature statistics (min, max, avg)
-- Wind speed metrics
-- Alert counts by level and type
-- Time-based windows
+- `extended_weather_producer.py` - City/country weather producer
+- Geocoding integration with Open-Meteo API
 
 ## Usage
 ```bash
-# Start aggregator
-python weather_aggregator.py --window-minutes 5
-
-# Check aggregates
-python consumer.py weather_aggregates
+# Generate weather for cities
+python extended_weather_producer.py Paris France
+python extended_weather_producer.py "New York" "United States"
+python extended_weather_producer.py Tokyo Japan
 ```
+
+## Enhanced Data Format
+Messages now include complete location metadata for HDFS partitioning.
