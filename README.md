@@ -1,24 +1,23 @@
-# Exercise 4: Data Transformation & Alerts
+# Exercise 5: Real-time Aggregates
 
 ## Objective
-Transform weather data and generate alerts based on thresholds.
+Implement sliding window aggregation for weather metrics.
 
 ## Files
-- `weather_transformer_simple.py` - Data transformer with alerts
-- `current_weather.py` - Weather data producer
+- `weather_aggregator.py` - Sliding window processor
+- `weather_transformer_simple.py` - Alert generator
 
-## Alert Levels
-- **Wind**: Level 1 (10-20 m/s), Level 2 (≥20 m/s)
-- **Heat**: Level 1 (25-35°C), Level 2 (≥35°C)
+## Metrics Calculated
+- Temperature statistics (min, max, avg)
+- Wind speed metrics
+- Alert counts by level and type
+- Time-based windows
 
 ## Usage
 ```bash
-# Start transformer
-python weather_transformer_simple.py --mode stream
+# Start aggregator
+python weather_aggregator.py --window-minutes 5
 
-# Generate weather data
-python current_weather.py 48.8566 2.3522
-
-# Check transformed data
-python consumer.py weather_transformed
+# Check aggregates
+python consumer.py weather_aggregates
 ```
