@@ -1,25 +1,17 @@
-# Exercise 1: Kafka & ZooKeeper Setup
+# Exercise 2: Basic Producer/Consumer
 
 ## Objective
-Set up a Kafka cluster with ZooKeeper using Docker for local development.
+Create basic Kafka producer and consumer scripts in Python.
 
 ## Files
-- `docker-compose.yml` - Docker services configuration
-- `requirements.txt` - Python dependencies
+- `consumer.py` - Generic Kafka consumer
+- `simple_producer.py` - Basic message producer
 
-## Quick Start
+## Usage
 ```bash
-# Start services
-docker-compose up -d
+# Start consumer
+python consumer.py weather_stream
 
-# Verify services
-docker ps
+# Send test message
+python simple_producer.py
 ```
-
-## Topics Created
-- `weather_stream` - Raw weather data
-- `weather_transformed` - Processed data with alerts
-- `weather_aggregates` - Aggregated metrics
-
-## Next Steps
-Continue with Exercise 2: Basic Producer/Consumer
