@@ -1,29 +1,30 @@
-# Exercise 7: HDFS Consumer & Storage
+# Exercise 8: BI Visualizations & Analytics
 
 ## Objective
-Store weather alerts in organized HDFS structure.
+Create data visualizations and business intelligence dashboards.
 
-## Files
-- `hdfs_consumer.py` - HDFS storage consumer
-- `hdfs_analyzer.py` - Storage analytics
-- `hdfs_health_check.py` - System diagnostics
+## Planned Features
+- Temperature evolution charts
+- Alert distribution analysis
+- Geographic heat maps
+- Real-time dashboards
+- Historical trend analysis
 
-## Storage Structure
-```
-hdfs-data/
-├── {country}/
-│   └── {city}/
-│       └── alerts_*.json
-```
+## Technology Stack
+- Matplotlib/Plotly for charts
+- Streamlit for web dashboard
+- Pandas for data analysis
 
 ## Usage
 ```bash
-# Start HDFS consumer
-python hdfs_consumer.py
+# Start visualization dashboard
+python weather_dashboard.py
 
-# Check storage health
-python hdfs_health_check.py
-
-# Analyze stored data
-python hdfs_analyzer.py
+# Generate analysis reports
+python weather_analytics.py
 ```
+
+## Data Sources
+- HDFS stored alerts
+- Real-time Kafka streams
+- Aggregated metrics
