@@ -13,7 +13,7 @@ Create basic Kafka producer and consumer scripts in Python.
 python consumer.py weather_stream
 
 # Create a simple producer to test
-# (See Exercise 3 for weather producer)
+echo '{"test": "Hello from Python"}' | docker exec -i kafka-broker kafka-console-producer --bootstrap-server localhost:9092 --topic weather_stream
 ```
 
 ## Key Concepts
